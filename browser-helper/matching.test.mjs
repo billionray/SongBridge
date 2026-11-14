@@ -189,10 +189,10 @@ test('仅歌名补搜可选中并按命中词定位，排除同名错误艺人',
  assert.deepEqual(none,['Solo']);
 });
 
-test('星号仅在查询与匹配中移除；简称有唯一全名时才预选',async()=>{
+test('星号保留在查询与匹配中；简称有唯一全名时才预选',async()=>{
  const t=song('もうそう☆えくすぷれす','Sasaki Sayaka');
- assert.equal(originalQuery(t),'もうそうえくすぷれす Sasaki Sayaka');
- const short=song('もうそうえくすぷれす','Sayaka',{id:'one'});
+ assert.equal(originalQuery(t),'もうそう☆えくすぷれす Sasaki Sayaka');
+ const short=song(t.name,'Sayaka',{id:'one'});
  for(const [a,b] of [[t,short],[short,t]]){
   const m=await match(a,[b],'romaji');assert.equal(m.candidate?.id,b.id);assert.equal(m.risk,'credits');
  }
@@ -268,4 +268,46 @@ test('自动匹配双向核对简繁专辑名与日语罗马音专辑名',async(
  }
  const a=song('Signal','甲',{album:'東京の空 2'});
  assert.equal((await match(a,[song('Signal','Alias',{album:'Tokyo no Sora 3'})],'romaji')).candidate,undefined);
+});
+
+test('九组已核对的跨平台署名均能从目标标题搜回，双向确认并排除同名翻唱',async()=>{
+ const pairs=[
+  [song('ぼなぺてぃーと▽S','BLEND-A'),song('ぼなぺてぃーと▽S','ブレンド・A')],
+  [song('Lost Princess','ペコリーヌ (CV: M・A・O) / コッコロ (CV: 伊藤美来) / キャル (CV: 立花理香)'),song('Lost Princess','Pecorine (CV: M·A·O)、Kokkoro (CV: Miku Ito)、Karyl (CV: Rika Tachibana)')],
+  [song('プレパレード','逢坂大河・櫛枝実乃梨・川嶋亜美(釘宮理恵、堀江由衣、喜多村英梨)'),song('プレパレード','逢坂大河(釘宮理恵)、櫛枝実乃梨(堀江由衣)、川嶋亜美(喜多村英梨)')],
+  [song('ぴゅあぴゅあはーと','Ho - Kago Tea Time'),song('ぴゅあぴゅあはーと','放課後ティータイム')],
+  [song('明日なき暴走！クラウンピースを追い詰めろ','IOSYS'),song('Ashita naki Boso! ClownPiece wo Oitsumero','IOSYS')],
+  [song('NadeNade','Shirayuki Fuma (CV:Koinu)'),song('なでなで','白雪 風真(CV:こいぬ)')],
+  [song('Uki Uki New My Way','Hirasara Ui (CV: Madoka Yonezawa)'),song('ウキウキNew! My Way','平沢憂(CV:米澤円)')],
+  [song('カサネテク','Chihiro Nakamura'),song("Kasaneteku - Japanese Girl's Strategy",'Chihiro Nakamura')],
+  [song('ギブス','Sheena Ringo'),song('Gips','椎名林檎')]
+ ];
+ for(const [a,b] of pairs)for(const [source,target] of [[a,b],[b,a]]){
+  const result=await matchTrack(source,'auto',reading,async function*(term){
+   yield term===target.name?[{...target,id:'cover',artist:'Other Singer'},target]:[];
+  });
+  assert.equal(result.candidate?.id,'good',source.name+' → '+target.name+' '+result.reason);
+  assert.equal(result.candidate.query,target.name);
+ }
+});
+
+test('符号有辨识作用，不能把不同标题按精确或读音自动合并',async()=>{
+ for(const [a,b] of [['S☆S','SS'],['S▽S','S△S'],['C++','C'],['☆','★'],['星☆空','星空']]){
+  const result=await matchTrack(song(a,'Singer'),'auto',reading,async function*(){yield [song(b,'Singer')]});
+  assert.equal(result.candidate,undefined,a);
+ }
+});
+
+test('未登记的罗马字歌名和片假名可双向补搜，保留声优冲突',async()=>{
+ const kana=song('キラキラ','Unknown Band'),roman=song('Kirakira','Unknown Band');
+ for(const [source,target] of [[kana,roman],[roman,kana]]){
+  const decision=await matchTrack(source,'auto',reading,async function*(term){
+   yield term.toLowerCase().replaceAll(' ','')===target.name.toLowerCase()?[target]:[];
+  });
+  assert.equal(decision.candidate?.id,'good');
+ }
+ const a=song('曲▽','甲・乙(声甲、声乙)');
+ const b=song('曲▽','甲(声乙)、乙(声甲)');
+ assert.equal((await match(a,[b],'romaji')).candidate,undefined);
+ assert.equal((await reading('星☆空')).includes('☆'),true);
 });
