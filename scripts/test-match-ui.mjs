@@ -8,7 +8,7 @@ const browser=await chromium.launch({...browserOptions(),proxy:browserProxy(dete
 try{const p=await browser.newPage();await p.route('http://127.0.0.1:5173/**',async route=>{const response=await worker.fetch(new Request(route.request().url()));await route.fulfill({status:response.status,headers:Object.fromEntries(response.headers),body:Buffer.from(await response.arrayBuffer())})});
 await p.goto('http://127.0.0.1:5173');const playlist={schemaVersion:1,name:'测试歌单',source:{platform:'spotify'},tracks:[{entryId:'1',id:'1',name:'Hello',artist:'Furui Riho / knoak'}]};
 await p.locator('input[type=file]').setInputFiles({name:'playlist.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(playlist))});
-await p.route('http://127.0.0.1:17321/**',r=>r.fulfill({json:{protocol:11,running:false,message:'就绪',job:null}}));await p.getByLabel('助手连接码').fill('demo');await p.getByRole('button',{name:'连接助手',exact:true}).click();
+await p.route('http://127.0.0.1:17321/**',r=>r.fulfill({json:{protocol:12,running:false,message:'就绪',job:null}}));await p.getByLabel('助手连接码').fill('demo');await p.getByRole('button',{name:'连接助手',exact:true}).click();
 for(const name of ['开始匹配'])assert.ok(await p.getByRole('button',{name,exact:true}).isEnabled());
 const hello={name:'Hello',artist:'Furui Riho / knoak'};const terms=[];
 const actual=await matchTrack(hello,'auto',reading,async function*(q){terms.push(q);yield await search(p,q);yield await search(p,q,true)});

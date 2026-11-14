@@ -2,7 +2,7 @@
 import {useState} from 'react';
 import ReviewDesk from './ReviewDesk';
 
-import PlatformImport from './PlatformImport';
+
 import BrowserImport from './BrowserImport';
 
 import {Music2,ArrowRight} from 'lucide-react';
@@ -25,10 +25,9 @@ export default function Home(){
  {tracks.length>0&&<div className="result-toolbar"><div><input className="playlist-name" aria-label="歌单名称" value={name} disabled={locked||helperBusy} onChange={e=>N(e.target.value)}/><small>{tracks.length} 首歌曲</small></div><div className="actions"><button disabled={locked||helperBusy} aria-expanded={sourceOpen} onClick={()=>setSourceOpen(v=>!v)}>{sourceOpen?'收起来源':'更换来源'}</button><button onClick={()=>download('txt')}>导出 TXT</button><button onClick={()=>download('json')}>导出 JSON</button></div></div>}
  {!!tracks.length&&<div className="import-route">{destination}
  </div>}
- <div hidden={!tracks.length||target!=='apple'}><BrowserImport code={code} setCode={setCode} source={source} name={name} tracks={tracks} restore={playlist=>load(normalizePlaylist(playlist))} activity={setHelperBusy} ready={setHelperReady}/></div>
- {(['spotify','ytmusic'] as const).map(platform=>tracks.length>0&&<div key={platform} hidden={target!==platform}><PlatformImport code={code} setCode={setCode} key={listVersion} active={target===platform} target={platform} name={name} tracks={tracks} activity={setHelperBusy}/></div>)}
+ <div hidden={!tracks.length}><BrowserImport target={target} code={code} setCode={setCode} source={source} name={name} tracks={tracks} restore={playlist=>load(normalizePlaylist(playlist))} activity={setHelperBusy} ready={setHelperReady}/></div>
  {(busy||notice)&&<div role='status' className='notice'>{busy||notice}</div>}
- {!!tracks.length&&target==='apple'&&!helperReady&&<ReviewDesk key={listVersion} name={name} tracks={tracks} review={false}
+ {!!tracks.length&&!helperReady&&<ReviewDesk key={listVersion} name={name} tracks={tracks} review={false}
   rows={tracks.map(()=>({checked:false,status:'来源'}))}
   detail={i=>source.platform==='spotify'&&/^[A-Za-z0-9]{22}$/.test(tracks[i].id)&&<a href={'https://open.spotify.com/track/'+tracks[i].id} target="_blank" rel="noreferrer">查看来源歌曲 ↗</a>}/>}
  </section></main>

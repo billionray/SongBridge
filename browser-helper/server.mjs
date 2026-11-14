@@ -1,6 +1,7 @@
 import {siteOrigins} from './origins.mjs';
-import {platformAction} from './platform-player.mjs';
-import {importBatch,recoverUnsubmitted,resetDestination} from './batch.mjs';
+import {resolvePlayerTarget} from './target-playlist.mjs';
+import {platformAction,searchPlayer,writePlayer,readList} from './platform-player.mjs';
+import {importBatch,recoverUnsubmitted} from './batch.mjs';
 import {readPlayer} from './spotify-player.mjs';
 import http from 'node:http';
 import {randomBytes,createHash} from 'node:crypto';
@@ -31,17 +32,27 @@ const lock=await acquireLock();await lock.writeFile(String(process.pid));
 const code=randomBytes(18).toString('base64url'),port=17321;
 const origins=new Set([...siteOrigins,'http://127.0.0.1:5173','http://localhost:5173']);
 let running=false,stopping=false,job=null,message='助手已启动，请在网页输入连接码。';
-try{job=JSON.parse(await readFile(path.join(dir,'job.json'),'utf8'));if(job){job.phase='paused';message='已恢复本地进度。已尝试导入的任务不会自动重复写入。'}}catch(e){if(e.code!=='ENOENT')throw e}
+const platforms=['apple','spotify','ytmusic'];
+let targetPlatform='apple';
+const jobs=new Map();
+const messages=new Map();
+function jobPath(platform){
+ return path.join(dir,platform==='apple'?'job.json':platform+'-job.json');
+}
 let saving=Promise.resolve();
 function save(){
+ const file=jobPath(targetPlatform);
  const snapshot=JSON.stringify(job);
  const write=saving.then(async()=>{
-  await writeFile(path.join(dir,'job.tmp'),snapshot);
-  await rename(path.join(dir,'job.tmp'),path.join(dir,'job.json'));
+  await writeFile(file+'.tmp',snapshot);
+  await rename(file+'.tmp',file);
  });
  saving=write.catch(()=>{});
  return write;
 }
+for(const platform of platforms){
+ targetPlatform=platform;job=null;
+ try{job=JSON.parse(await readFile(jobPath(platform),'utf8'));if(job){job.phase='paused';message='已恢复本地进度。已尝试导入的任务不会自动重复写入。'}}catch(e){if(e.code!=='ENOENT')throw e}
 if(job){
  let restored=0;
  for(const [index,e] of Object.entries(job.entries)){
@@ -67,14 +78,58 @@ if(job){
  }
  if(restored){message='已恢复 '+restored+' 首旧版记录，可重新核对并导入。';await save()}
 }
+ jobs.set(platform,job);
+}
+targetPlatform='apple';job=jobs.get('apple');
+function activate(platform){
+ if(platform===targetPlatform)return;
+ jobs.set(targetPlatform,job);messages.set(targetPlatform,message);
+ targetPlatform=platform;job=jobs.get(platform);
+ message=messages.get(platform)||(job?'已恢复本地进度。':'助手已连接');
+}
 const session=playerSession(()=>chromium.launchPersistentContext(path.join(dir,'profile'),{
  ...browserOptions(),headless:false,chromiumSandbox:true,viewport:null,proxy:browserProxy(detectProxy().url)
 }));
 const {getPage}=session;
 const run=fn=>{if(running)throw Error('正在执行，请先暂停当前操作');running=true;stopping=false;Promise.resolve().then(fn).catch(e=>{message=e.message;if(job)job.phase='error'}).finally(async()=>{await save().catch(e=>{message='保存进度失败：'+e.message});running=false})};
 let matching=false;
-function status(){return {protocol:11,running,matching,message,job}}
+function status(platform=targetPlatform){
+ const active=platform===targetPlatform;
+ return {protocol:12,running,matching:active&&matching,message:active?message:running?'助手正在处理其他平台的任务':messages.get(platform)||'助手已连接',job:active?job:jobs.get(platform)};
+}
+async function playerTarget(page,create){
+ if(job.target)return job.target;
+ const target=await resolvePlayerTarget(page,targetPlatform,job.playlist.name,create&&!job.creationAttempted,async()=>{
+  job.creationAttempted=true;await save();
+ });
+ if(!target&&create)throw Error('未找到已提交创建的同名歌单，请在播放器中核对名称后重试');
+ job.target=target;await save();return target;
+}
+async function importPlayerEntries(indices){
+ const page=await getPage(),target=await playerTarget(page,true);
+ const seen=new Set();
+ await importBatch({indices,entries:job.entries,save,stopped:()=>stopping,processTrack:async(i,e)=>{
+  const id=e.candidate.id;
+  if(seen.has(id)){confirmMember(e,seen,target);return}
+  message='正在导入：'+job.playlist.tracks[i].name;
+  const result=await writePlayer(page,targetPlatform,target.url,[id],()=>{},async()=>{
+   e.status='pending';await save();
+  });
+  seen.add(id);
+  if(result.added)e.status='pending';
+  confirmMember(e,seen,target);
+ }});
+ job.phase=stopping?'paused':'complete';message=stopping?'已暂停，可继续导入。':'导入结束，请查看每首歌曲的结果。';
+}
+
 async function recheck(){
+ if(targetPlatform!=='apple'){
+  const page=await getPage(),target=await playerTarget(page,false);
+  if(!target){message='未找到同名歌单，可以继续导入。';return}
+  const list=await readList(page,targetPlatform,target.url),ids=new Set(list.tracks.map(t=>t.id));
+  for(const e of Object.values(job.entries))if(['matched','pending','shelved'].includes(e.status))confirmMember(e,ids,target);
+  await save();message='已核对目标歌单，共 '+ids.size+' 首。';return;
+ }
  const p=await getPage();
  let target=job.target;
  if(!target){
@@ -119,14 +174,15 @@ async function scanTracks(mode,index,override,resume=false){
   try{
    const track=job.playlist.tracks[i];
    async function* pages(term){
+    if(targetPlatform!=='apple'){yield await session.read(p=>searchPlayer(p,targetPlatform,term),()=>stopping);return}
     for(const expanded of [false,true]){if(stopping)return;yield await session.read(p=>search(p,term,expanded,()=>stopping),()=>stopping)}
    }
-   const decision=await matchTrack(track,mode,reading,pages,override,()=>stopping,ids=>session.read(p=>japaneseCatalog(p,ids),()=>stopping));
+   const decision=await matchTrack(track,mode,reading,pages,override,()=>stopping,targetPlatform==='apple'?ids=>session.read(p=>japaneseCatalog(p,ids),()=>stopping):undefined);
    if(stopping)break;
    if(job.entries[i]?.userReviewed)continue;
    const {ordered,...match}=decision;job.entries[i]={...match,reading:override,mode,status:decision.candidate?'matched':ordered.length?'review':'unmatched',candidates:ordered};if(match.candidate)auto++;else if(ordered.length)review++;else missing++;errors=0;
   }
-  catch(e){if(job.entries[i]?.userReviewed)continue;failed++;if(job.entries[i]?.candidate)job.entries[i].error=e.message;else job.entries[i]={status:'search_error',error:e.message};if(++errors>=3){await save();throw Error('连续三次搜索失败，已暂停。请检查 Apple Music 网页后继续匹配。')}}
+  catch(e){if(job.entries[i]?.userReviewed)continue;failed++;if(job.entries[i]?.candidate)job.entries[i].error=e.message;else job.entries[i]={status:'search_error',error:e.message};if(++errors>=3){await save();throw Error('连续三次搜索失败，已暂停。请检查目标播放器网页后继续匹配。')}}
   await save();
  }
  job.lastScan={mode,auto,review,missing,failed};
@@ -137,6 +193,7 @@ async function apply(indices){
  const chosen=[...new Set(indices)];if(chosen.some(i=>!Number.isInteger(i)||!job.entries[i]?.candidate||!['matched','pending'].includes(job.entries[i].status)))throw Error('选择包含未匹配歌曲，请重新核对');
  for(const [key,e] of Object.entries(job.entries)){if(e.status==='pending'&&!chosen.includes(Number(key)))e.status='shelved'}
  await save();
+ if(targetPlatform!=='apple')return importPlayerEntries(chosen);
  const p=await getPage();await p.goto('https://music.apple.com/cn/new',{waitUntil:'domcontentloaded'});
  await p.getByRole('button',{name:'我的账户',exact:true}).waitFor({state:'visible',timeout:45000});
  job.phase='checking';message='正在读取同名歌单及已有歌曲…';let target=job.target?.name===job.playlist.name?job.target:null;
@@ -210,6 +267,7 @@ async function apply(indices){
  const pendingCount=chosen.filter(i=>job.entries[i].status==='pending').length;
  job.phase=stopping?'paused':'complete';message=stopping?'已暂停，可继续导入。':'本批处理完成，待核对 '+pendingCount+' 首，未提交 '+chosen.filter(i=>job.entries[i].notSubmitted).length+' 首。';
 }
+let handlingAction=false;
 const server=http.createServer(async(req,res)=>{
  const origin=req.headers.origin;const allowed=origins.has(origin);
  const headers={'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'};
@@ -219,17 +277,26 @@ const server=http.createServer(async(req,res)=>{
  if(req.method==='OPTIONS')return reply(204,{});
  if(req.headers['x-songbridge-code']!==code)return reply(401,{error:'连接码不正确，请使用助手窗口里的本次连接码'});
  try{
-  if(req.method==='GET'&&req.url==='/status')return reply(200,status());
+  const url=new URL(req.url,'http://localhost');
+  const platform=url.searchParams.get('platform')||'apple';
+  if(!platforms.includes(platform))throw Error('不支持的平台');
+  req.url=url.pathname;
+  if(req.method==='GET'&&req.url==='/status')return reply(200,status(platform));
   if(req.method==='GET'&&req.url==='/spotify-progress')return reply(200,{message});
   if(req.method!=='POST')return reply(404,{error:'Not found'});
   let body='';for await(const c of req){body+=c;if(Buffer.byteLength(body)>5e6)throw Error('请求超过 5 MB')};const d=JSON.parse(body||'{}');
-  if(req.url==='/stop'){stopping=true;message='正在结束当前步骤…';return reply(200,status())}
+  if(req.url==='/stop'&&platform===targetPlatform&&running){stopping=true;message='正在结束当前步骤…';return reply(200,status())}
+  if((running&&platform!==targetPlatform)||handlingAction)throw Error('助手正在处理其他操作');
+  if(!running)activate(platform);
+  handlingAction=true;
+  try{
+
   if(running&&!(matching&&req.url==='/select'))throw Error('正在执行，请先暂停当前操作');
-  if(['/player-login','/player-read','/player-match','/player-search','/player-write'].includes(req.url)){
+  if(['/player-login','/player-read'].includes(req.url)){
    running=true;
    try{
-    const act=p=>platformAction(p,req.url,d,(n,total)=>{message='已确认添加 '+n+' / '+total+' 首'});
-    return reply(200,req.url==='/player-write'?await act(await getPage()):await session.read(act));
+    const act=p=>platformAction(p,req.url,d);
+    return reply(200,await session.read(act));
    }
    finally{running=false}
   }
@@ -242,7 +309,7 @@ const server=http.createServer(async(req,res)=>{
     message=result.warning;return reply(200,result);
    }catch(err){message=err.message;throw err}finally{running=false}
   }
-  if(req.url==='/login'){run(async()=>{const p=await getPage();await p.goto('https://music.apple.com/cn/new',{waitUntil:'domcontentloaded'});message='请在独立浏览器窗口登录 Apple Music，完成后返回网页匹配。'})}
+  if(req.url==='/login'){run(async()=>{const p=await getPage();await platformAction(p,'/player-login',{platform:targetPlatform});message='请在播放器登录后返回网页匹配。'})}
   else if(req.url==='/continue'){
    if(!job||d.hash!==job.hash)throw Error('任务已改变');
    run(()=>scan('auto',undefined,undefined,true));
@@ -256,17 +323,11 @@ const server=http.createServer(async(req,res)=>{
    if(d.hash!==job?.hash)throw Error('任务已改变');
    const e=job.entries[d.index];if(!['pending','shelved'].includes(e?.status))throw Error('歌曲状态已改变');
    e.status=d.shelved?'shelved':'pending';await save();
-  }else if(req.url==='/target'){
-   if(d.hash!==job?.hash)throw Error('任务已改变');
-   if(d.url){const u=new URL(d.url);if(u.origin!=='https://music.apple.com'||!/^\/(?:cn\/)?library\/playlist\/p\.[\w.-]+\/?$/.test(u.pathname))throw Error('请输入 Apple Music 资料库歌单地址');
-   const p=await getPage();await p.goto(u.href);await p.getByRole('main').getByRole('heading',{name:job.playlist.name,exact:true}).waitFor({timeout:15000});job.target={name:job.playlist.name,url:u.href}}
-   else {resetDestination(job);message='将重新查找目标歌单，已选版本可重新导入。'}
-   await save();
   }else if(req.url==='/recheck'){if(!job||d.hash!==job.hash)throw Error('任务已改变');run(recheck)
   }else if(req.url==='/scan'){
    const playlist=validateJob(d.playlist);const hash=createHash('sha256').update(JSON.stringify(playlist)).digest('hex');
    if(job&&(job.playlist.source?.platform??'netease')===playlist.source.platform&&(!job.playlist.source?.url||!playlist.source.url||job.playlist.source.url===playlist.source.url)&&job.playlist.name===playlist.name&&JSON.stringify(job.playlist.tracks.map(({id,name,artist,album})=>[id,name,artist,album]))===JSON.stringify(playlist.tracks.map(({id,name,artist,album})=>[id,name,artist,album]))){job.hash=hash;job.playlist=playlist}
-   if(job?.hash!==hash){if(job)await writeFile(path.join(dir,'previous-job.json'),JSON.stringify(job));job={hash,playlist,entries:{},creationAttempted:false,phase:'ready'}}
+   if(job?.hash!==hash){if(job)await writeFile(path.join(dir,targetPlatform+'-previous-job.json'),JSON.stringify(job));job={hash,playlist,entries:{},creationAttempted:false,phase:'ready'}}
    await save();run(()=>scan(['auto','smart','romaji'].includes(d.mode)?d.mode:'exact',d.index,d.reading));
   }else if(req.url==='/select'){
    if(d.hash!==job?.hash)throw Error('任务已改变，请刷新进度后重试');
@@ -274,6 +335,7 @@ const server=http.createServer(async(req,res)=>{
   }else if(req.url==='/import'){if(d.hash!==job?.hash)throw Error('任务已改变，请刷新进度后重试');run(()=>apply(d.indices))}
   else return reply(404,{error:'Not found'});
   reply(200,status());
+  }finally{handlingAction=false}
  }catch(e){reply(400,{error:e.message})}
 });
 server.listen(port,'127.0.0.1',()=>console.log(`SongBridge 浏览器助手\n连接码：${code}\n保持此窗口打开，在 SongBridge 的“浏览器导入”中输入连接码。\n关闭窗口即可停止助手。`));

@@ -1,5 +1,3 @@
-export type Target='spotify'|'ytmusic';
-export type Candidate={id:string;name:string;artist:string;album:string;url:string};
 export async function playerRequest<T>(code:string,route:string,data:object):Promise<T>{
  if(!code.trim())throw Error('请输入桌面助手连接码');
  let r:Response;

@@ -38,23 +38,23 @@ try{
  await p.getByLabel('选择歌单').selectOption('0');assert.equal(await p.getByLabel('歌单名称').inputValue(),'First');
  let helperJob,matching=false;
  await p.route('http://127.0.0.1:17321/**',async route=>{
-  if(route.request().url().endsWith('/scan')){
+  if(new URL(route.request().url()).pathname.endsWith('/scan')){
    const {playlist}=route.request().postDataJSON();
    matching=true;
    helperJob={hash:'review-test',playlist,entries:{0:{status:'matched',risk:'consistent',candidates:[{id:'live',name:'Apple (Live)',artist:'Singer'}]},1:{status:'matched',risk:'credits',reason:'唯一候选，完整艺人署名对应',candidate:{id:'unique',name:'Destination',artist:'Singer'}}}};
   }
-  if(route.request().url().endsWith('/select')){
+  if(new URL(route.request().url()).pathname.endsWith('/select')){
    const {index,id}=route.request().postDataJSON();assert.ok(matching);helperJob.entries[index].candidate=helperJob.entries[index].candidates.find(c=>c.id===id);matching=false;
   }
-  if(route.request().url().endsWith('/check')){
+  if(new URL(route.request().url()).pathname.endsWith('/check')){
    const {index,checked}=route.request().postDataJSON();helperJob.entries[index].checked=checked;
   }
-  if(route.request().url().endsWith('/continue'))assert.equal(route.request().postDataJSON().hash,helperJob.hash);
-  return route.fulfill({json:{protocol:11,job:helperJob,matching,running:matching,message:'就绪'}});
+  if(new URL(route.request().url()).pathname.endsWith('/continue'))assert.equal(route.request().postDataJSON().hash,helperJob.hash);
+  return route.fulfill({json:{protocol:12,job:helperJob,matching,running:matching,message:'就绪'}});
  });
  await p.getByLabel('助手连接码',{exact:true}).fill('demo');
  await p.getByRole('button',{name:'连接助手',exact:true}).click();
- const panel=p.getByRole('region',{name:'浏览器导入'});
+ const panel=p.getByRole('region',{name:'Apple Music 导入'});
  await panel.getByRole('button',{name:'开始匹配'}).click();
  await panel.getByLabel('浏览器版本 1').selectOption('live');
  await panel.getByText('Apple (Live)',{exact:true}).first().waitFor();
@@ -84,29 +84,24 @@ try{
  assert.equal(await p.getByLabel('歌单名称').inputValue(),'First');
  assert.equal(await panel.getByLabel('浏览器选择 Missing').isChecked(),false);
  assert.equal(await p.getByRole('button',{name:'API 导入'}).count(),0);
- await p.getByRole('group',{name:'目标平台'}).getByRole('button',{name:'Spotify'}).click();
- for(const target of ['Spotify','YouTube Music']){
+ for(const [target,key] of [['Spotify','spotify'],['YouTube Music','ytmusic']]){
+  let job=null;
+  await p.route('**/*?platform='+key,async route=>{
+   const path=new URL(route.request().url()).pathname;
+   if(path==='/scan'){
+    const {playlist}=route.request().postDataJSON();
+    job={hash:key,playlist,entries:{1:{status:'matched',risk:'credits',reason:'唯一候选，完整艺人署名对应',candidate:{name:'Missing',artist:'Singer',id:'test'}}}};
+   }
+   await route.fulfill({json:{protocol:12,job,running:false,matching:false,message:'就绪'}});
+  });
   await p.getByRole('group',{name:'目标平台'}).getByRole('button',{name:target,exact:true}).click();
   const pane=p.getByRole('region',{name:target+' 导入'});
-  let release;
-  const gate=new Promise(resolve=>release=resolve),calls=[];
-  await p.route('**/player-match',async route=>{
-   const {track,mode}=route.request().postDataJSON();
-   calls.push(track.name);assert.equal(mode,'auto');
-   if(calls.length===1)await gate;
-   await route.fulfill({json:{options:[{id:'a',name:track.name,artist:'Singer'},{id:'b',name:track.name+' (Live)',artist:'Singer'}],id:'a',risk:'credits',reason:'唯一候选，完整艺人署名对应'}});
-  });
   await pane.getByRole('button',{name:'开始匹配'}).click();
-  await pane.getByRole('button',{name:'暂停'}).click();release();
-  await pane.getByText('已暂停匹配，可继续。').waitFor();
-  await pane.getByLabel(target+' 版本').selectOption('b');
-  await pane.getByRole('button',{name:'继续匹配'}).click();
-  await pane.getByText('匹配完成，请核对候选版本。').waitFor();
-  assert.deepEqual(calls,['Apple','Missing']);
+  await pane.getByRole('button',{name:'继续匹配'}).waitFor();
+  assert.ok(await pane.getByRole('button',{name:'下载报告'}).isVisible());
   const rowText=await pane.locator('tbody tr').last().innerText();
   assert.match(rowText,/Missing · Singer/);assert.match(rowText,/唯一候选，完整艺人署名对应/);
-  assert.equal(await pane.getByLabel(target+' 版本').inputValue(),'b');
-  await p.unroute('**/player-match');
+  assert.equal(await pane.getByRole('textbox',{name:/目标歌单链接/}).count(),0);
  }
  await p.getByRole('group',{name:'目标平台'}).getByRole('button',{name:'Apple Music'}).click();
  assert.equal(await panel.getByLabel('浏览器选择 Missing').isChecked(),false);

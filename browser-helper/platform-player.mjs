@@ -1,5 +1,4 @@
-import {matchTrack,searchText} from './matching.mjs';
-import {reading} from './reading.mjs';
+import {searchText} from './matching.mjs';
 import {readPlayer,spotifyRows} from './spotify-player.mjs';
 
 const hosts={apple:'https://music.apple.com',spotify:'https://open.spotify.com',ytmusic:'https://music.youtube.com'};
@@ -98,7 +97,7 @@ export async function searchPlayer(page,platform,query){
  });
  return (await snapshot(rows,platform)).filter(t=>t.id&&t.name).slice(0,12);
 }
-export async function writePlayer(page,platform,link,ids,progress){
+export async function writePlayer(page,platform,link,ids,progress,beforeSubmit=async()=>{}){
  let target;
  try{target=await readList(page,platform,link)}
  catch(error){
@@ -120,12 +119,16 @@ export async function writePlayer(page,platform,link,ids,progress){
    await menu.hover();
    const item=page.getByRole('menuitem',{name:target.name,exact:true});
    if(!await item.count()){await menu.click();await item.waitFor()}
+   await item.waitFor({state:'visible'});
+   await beforeSubmit();
    await item.click();
   }else{
    await page.goto(hosts.ytmusic+'/watch?v='+id,{waitUntil:'domcontentloaded'});
    await page.locator('ytmusic-player-bar ytmusic-menu-renderer button').last().click();
    await page.locator('ytmusic-menu-service-item-renderer,ytmusic-menu-navigation-item-renderer').filter({hasText:/Save to playlist|Add to playlist|保存到播放列表|添加到播放列表/i}).click();
    const item=page.locator('ytmusic-playlist-add-to-option-renderer,ytd-playlist-add-to-option-renderer').filter({has:page.getByText(target.name,{exact:true})});
+   await item.waitFor({state:'visible'});
+   await beforeSubmit();
    await item.click();
   }
   // Confirm membership before attempting the next write. A retry rereads the target.
@@ -135,17 +138,9 @@ export async function writePlayer(page,platform,link,ids,progress){
  }
  return {added:pending.length,skipped:ids.length-pending.length};
 }
-export async function platformAction(page,route,d,progress){
+export async function platformAction(page,route,d){
  if(!Object.hasOwn(hosts,d.platform))throw Error('不支持的平台');
  if(route==='/player-login'){await page.goto(hosts[d.platform],{waitUntil:'domcontentloaded'});await page.bringToFront();return {ok:true}}
  if(route==='/player-read')return readList(page,d.platform,d.link);
- if(d.platform==='apple')throw Error('请使用 Apple Music 浏览器导入');
- if(route==='/player-match'&&typeof d.track?.name==='string'&&typeof d.track.artist==='string'){
-  const mode=['exact','smart','romaji'].includes(d.mode)?d.mode:'auto';
-  const decision=await matchTrack(d.track,mode,reading,async function*(query){yield await searchPlayer(page,d.platform,query)},d.reading);
-  return {options:decision.ordered,id:decision.candidate?.id||'',risk:decision.risk,reason:decision.reason};
- }
- if(route==='/player-search'&&typeof d.query==='string')return searchPlayer(page,d.platform,d.query);
- if(route==='/player-write'&&Array.isArray(d.ids)&&d.ids.length&&d.ids.every(id=>typeof id==='string'&&(d.platform==='spotify'?/^[a-zA-Z0-9]{22}$/:/^[\w-]{11}$/).test(id)))return writePlayer(page,d.platform,d.link,d.ids,progress);
  throw Error('无效播放器请求');
 }
