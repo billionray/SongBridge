@@ -2,7 +2,7 @@
 
 支持从网易云、QQ 音乐、Spotify、Apple Music、YouTube Music 读取歌单，导出 JSON/TXT，并通过桌面助手写入 Apple Music、Spotify 或 YouTube Music。
 
-## 一键部署到 Cloudflare Workers
+## 部署到 Cloudflare Workers
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/billionray/SongBridge)
 
