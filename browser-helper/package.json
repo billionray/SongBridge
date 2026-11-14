@@ -1,0 +1,1 @@
+{"name":"am-web-import","private":true,"type":"module","version":"1.0.0","dependencies":{"kuromoji":"0.1.2","opencc-js":"1.4.2","playwright-core":"1.58.2","wanakana":"5.3.1"},"scripts":{"start":"node start.mjs","test":"node --test tests.mjs"}}

@@ -1,0 +1,30 @@
+{
+  "name": "songbridge",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "install:ci": "npm install --prefer-offline --no-audit --no-fund",
+    "build": "node scripts/build-light.mjs",
+    "dev": "node scripts/preview-light.mjs",
+    "test": "node scripts/test-playlist.mjs",
+    "prebuild": "python3 scripts/package-helper.py"
+  },
+  "dependencies": {
+    "fflate": "0.8.3",
+    "lucide-react": "1.31.0",
+    "react": "19.2.6",
+    "react-dom": "19.2.6"
+  },
+  "devDependencies": {
+    "@types/node": "22.19.19",
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "esbuild": "0.28.0",
+    "typescript": "5.9.3",
+    "wrangler": "4.162.0"
+  }
+}

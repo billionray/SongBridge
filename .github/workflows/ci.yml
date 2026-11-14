@@ -1,0 +1,25 @@
+name: Test
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            browser-helper/package-lock.json
+      - run: npm ci && npm ci --prefix browser-helper
+      - run: npm run build && npm test && node scripts/test-spotify.mjs
+      - run: node scripts/test-deployment.mjs
+      - run: node --test browser-helper/tests.mjs browser-helper/*.test.mjs
+      - run: node scripts/test-source-ui.mjs && node scripts/test-player-web.mjs && node scripts/test-large-playlist.mjs
+      - run: npx --no-install wrangler deploy --dry-run

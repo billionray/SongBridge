@@ -1,0 +1,4 @@
+{
+  "compilerOptions": { "target":"ES2022", "lib":["DOM","DOM.Iterable","ESNext"], "strict":true, "skipLibCheck":true, "noEmit":true, "esModuleInterop":true, "module":"ESNext", "moduleResolution":"Bundler", "jsx":"react-jsx", "types":["node"] },
+  "include":["client.tsx","app/page.tsx","app/api/playlist/route.ts"]
+}
