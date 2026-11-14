@@ -114,6 +114,23 @@ try{
  await panel.getByRole('button',{name:'Missing',exact:true}).click();
  await panel.getByRole('button',{name:'返回清单'}).click();
  assert.ok(await panel.getByLabel('浏览器选择 Missing').isVisible());
+ // The active helper job can differ from the loaded source after a reconnect.
+ // Its progress, track rows and index-based actions must all refer to the same snapshot.
+ const savedTrack={id:'saved-id',name:'Helper-only track',artist:'Helper singer',album:''};
+ helperJob={hash:'different-job',playlist:{...helperJob.playlist,name:'Other job',tracks:[savedTrack]},
+  entries:{0:{status:'matched',risk:'consistent',checked:true,candidate:{id:'target-id',name:'Target recording',artist:'Helper singer'}}}};
+ matching=true;
+ await panel.getByRole('button',{name:'Helper-only track',exact:true}).waitFor();
+ assert.equal(await panel.locator('tbody tr').count(),1);
+ assert.equal(await panel.getByLabel('浏览器选择 Helper-only track').isChecked(),true);
+ assert.equal(await p.getByLabel('歌单名称').inputValue(),'First');
+ matching=false;
+ await panel.getByRole('button',{name:'返回当前来源清单'}).click();
+ await p.getByRole('button',{name:'Missing',exact:true}).waitFor();
+ assert.equal(await panel.locator('tbody tr').count(),0);
+ await panel.getByRole('button',{name:'加载助手任务清单'}).click();
+ await panel.getByRole('button',{name:'Helper-only track',exact:true}).waitFor();
+ assert.equal(await p.getByLabel('歌单名称').inputValue(),'Other job');
  console.log('PASS: source loading, helper review, restore, target switching and mobile navigation');
 }finally{await browser.close()}
 
