@@ -41,7 +41,7 @@ try{
   if(route.request().url().endsWith('/scan')){
    const {playlist}=route.request().postDataJSON();
    matching=true;
-   helperJob={hash:'review-test',playlist,entries:{0:{status:'matched',risk:'consistent',candidates:[{id:'live',name:'Apple (Live)',artist:'Singer'}]},1:{status:'matched',risk:'conflict'}}};
+   helperJob={hash:'review-test',playlist,entries:{0:{status:'matched',risk:'consistent',candidates:[{id:'live',name:'Apple (Live)',artist:'Singer'}]},1:{status:'matched',risk:'credits',reason:'唯一候选，完整艺人署名对应',candidate:{id:'unique',name:'Destination',artist:'Singer'}}}};
   }
   if(route.request().url().endsWith('/select')){
    const {index,id}=route.request().postDataJSON();assert.ok(matching);helperJob.entries[index].candidate=helperJob.entries[index].candidates.find(c=>c.id===id);matching=false;
@@ -60,6 +60,8 @@ try{
  await panel.getByText('Apple (Live)',{exact:true}).first().waitFor();
  await panel.getByLabel('核对视图').selectOption('review');
  assert.equal(await panel.locator('tbody tr').count(),1);assert.ok(await panel.getByLabel('浏览器选择 Missing').isChecked());
+ assert.match(await panel.locator('tbody tr').innerText(),/Destination · Singer/);
+ assert.match(await panel.locator('tbody tr').innerText(),/唯一候选，完整艺人署名对应/);
  await panel.getByLabel('浏览器选择 Missing').click();
  await panel.locator('input[aria-label="浏览器选择 Missing"]:not(:checked)').waitFor();
  await panel.getByRole('button',{name:'继续匹配'}).click();
@@ -92,7 +94,7 @@ try{
    const {track,mode}=route.request().postDataJSON();
    calls.push(track.name);assert.equal(mode,'auto');
    if(calls.length===1)await gate;
-   await route.fulfill({json:{options:[{id:'a',name:track.name,artist:'Singer'},{id:'b',name:track.name+' (Live)',artist:'Singer'}],id:'a',risk:'consistent',reason:'已匹配'}});
+   await route.fulfill({json:{options:[{id:'a',name:track.name,artist:'Singer'},{id:'b',name:track.name+' (Live)',artist:'Singer'}],id:'a',risk:'credits',reason:'唯一候选，完整艺人署名对应'}});
   });
   await pane.getByRole('button',{name:'开始匹配'}).click();
   await pane.getByRole('button',{name:'暂停'}).click();release();
@@ -101,6 +103,8 @@ try{
   await pane.getByRole('button',{name:'继续匹配'}).click();
   await pane.getByText('匹配完成，请核对候选版本。').waitFor();
   assert.deepEqual(calls,['Apple','Missing']);
+  const rowText=await pane.locator('tbody tr').last().innerText();
+  assert.match(rowText,/Missing · Singer/);assert.match(rowText,/唯一候选，完整艺人署名对应/);
   assert.equal(await pane.getByLabel(target+' 版本').inputValue(),'b');
   await p.unroute('**/player-match');
  }

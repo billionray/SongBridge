@@ -16,6 +16,7 @@ function queryForms(query){
 const japanese=/[\u3040-\u30ff\u3400-\u9fff]/u;
 const cv=/^(?:cv|声優|声优)\s*[.:・]?\s*(.+)$/i;
 const versions=[
+ ['最終章',/最終章\s*(?:ver(?:sion)?\.?)?/i],
  ['伴奏',/\b(?:off[\s-]*vocal|instrumental|karaoke)\b|伴奏|カラオケ/i],
  ['TV Size',/\btv[\s-]*(?:size|edit|version|ver\.?)\b/i],
  ['加速版',/\bsped[\s-]*up\b/i],['变速版',/\bslowed\b/i],
@@ -45,7 +46,7 @@ function credit(s){
 const artistSpellings=[
  ['BLEND-A','ブレンド・A'],['Ho - Kago Tea Time','放課後ティータイム'],
  ['Sheena Ringo','椎名林檎'],['ペコリーヌ','Pecorine'],['キャル','Karyl'],
- ['M・A・O','M·A·O'],['白雪 風真','Shirayuki Fuma'],['平沢憂','Hirasawa Ui']
+ ['Kuroneko','96猫'],['M・A・O','M·A·O'],['白雪 風真','Shirayuki Fuma'],['平沢憂','Hirasawa Ui']
 ];
 function spellings(value){
  const key=norm(value);
@@ -125,7 +126,19 @@ function profile(t){
 
 // Share successful dictionary lookups across tracks; a failed lookup can be retried.
 const dictionaries=new WeakMap();
-const artistReadings=new Map([['佐咲紗花','Sasaki Sayaka'],['亜咲花','Asaka']].map(([name,reading])=>[norm(name),reading]));
+const artistReadings=new Map([['佐咲紗花','Sasaki Sayaka'],['亜咲花','Asaka'],['東山奈央','Toyama Nao']].map(([name,reading])=>[norm(name),reading]));
+async function mixedTitleReading(title,convert){
+ const parts=title.match(/[ァ-ヺー]+|[^ァ-ヺー]+/gu)||[];
+ if(parts.length<2||!parts.some(part=>/[ぁ-ゖ一-龯]/u.test(part)))return '';
+ const words=[];
+ for(const part of parts){
+  if(!/^[ァ-ヺー]+$/u.test(part)){words.push(await convert(part));continue}
+  const term=({'グロッケンシュピール':'glockenspiel','パクチー':'phakchi'})[part]||dictionaryForms(part)[0];
+  if(!term)return '';
+  words.push(term);
+ }
+ return words.join(' ');
+}
 export async function prepare(t,mode,convert,override={}){
  const p=profile(t),readings=new Map(),personReadings=new Map();
  if(mode==='romaji'){
@@ -146,7 +159,7 @@ export async function prepare(t,mode,convert,override={}){
    else if(p.credits[0])personReadings.set(p.credits[0].person,override.artist);
   }
  }
- return {...p,readings,personReadings};
+ return {...p,readings,personReadings,mixedTitle:mode==='romaji'?await mixedTitleReading(p.base,convert):''};
 }
 export const originalQuery=t=>searchText([t.name,t.artist||t.artists?.join(' / ')].filter(Boolean).join(' '));
 const latin=s=>norm(s.normalize('NFD').replace(/\p{M}/gu,'')).replace(/ou|oo/g,'o').replace(/uu/g,'u').replace(/shi/g,'si').replace(/chi/g,'ti').replace(/tsu/g,'tu').replace(/fu/g,'hu');
@@ -177,9 +190,9 @@ function albumReadingScore(a,b,left,right){
  if(x.match(/\d+/g)?.join('/')!==y.match(/\d+/g)?.join('/'))return 0;
  return textSimilarity(x,y);
 }
-function albumEvidence(a,b,left,right,readingScore){
+function albumEvidence(a,b,readingScore){
  const x=norm(a),y=norm(b);
- if(!x||!y||x===norm(left.base)||y===norm(right.base)||albumReadingScore(a,right.base,left,right)===1||albumReadingScore(b,left.base,right,left)===1)return 0;
+ if(!x||!y)return 0;
  const generic=/greatesthits|bestof|compilation|精选|合辑|群星|ベストアルバム|^(single|ep|album|soundtrack|原声带|未命名|unknown)$/;
  if(generic.test(x)||generic.test(y))return 0;
  if(x===y)return 1;
@@ -219,7 +232,8 @@ function evaluate(t,c,l,r,mode){
  const literalTitle=eq(l.base,r.base);
  const translation=mode==='exact'?'':alternateTitle(l.base,l.credits);
  const confirmedTitle=!!translation&&norm(translation)===norm(r.base)&&norm(alternateTitle(r.base,r.credits))===norm(l.base);
- const dictionaryTitle=mode==='romaji'&&!literalTitle&&!confirmedTitle&&dictionaryPair(l.base,r.base);
+ const mixedTitle=(l.mixedTitle&&norm(l.mixedTitle)===norm(r.base))||(r.mixedTitle&&norm(r.mixedTitle)===norm(l.base));
+ const dictionaryTitle=mode==='romaji'&&!literalTitle&&!confirmedTitle&&(mixedTitle||dictionaryPair(l.base,r.base));
  const translatedTitle=confirmedTitle||dictionaryTitle;
  const title=literalTitle||(translatedTitle?2:0);
  const isrc=!!t.isrc&&!!c.isrc&&norm(t.isrc)===norm(c.isrc);
@@ -231,6 +245,11 @@ function evaluate(t,c,l,r,mode){
  const personEq=(a,b)=>{
   if(!norm(a)||!norm(b))return 0;
   if(mode!=='exact'&&spellings(a).some(s=>norm(s)===norm(b)))return norm(a)===norm(b)?3:2;
+  if(mode!=='exact'){
+   const bilingual=s=>clean(s).match(/^([\p{Script=Han}]+)\s+([A-Za-z][A-Za-z '-]*)$/u);
+   const hasName=(full,name)=>bilingual(full)?.slice(1).some(part=>norm(part)===norm(name));
+   if(hasName(a,b)||hasName(b,a))return 3;
+  }
   if(mode!=='romaji')return eq(a,b);
   const x=personalReading(a,l),y=personalReading(b,r);
   if(norm(a)===norm(b))return 3;
@@ -300,20 +319,39 @@ function evaluate(t,c,l,r,mode){
  else if(t.isrc&&c.isrc&&!isrc)conflict='录音 ISRC 不同';
  const exact=norm(t.name)===norm(c.name)&&strength===6;
  const partial=primaryExact&&!artists;
+ const albumScore=mode==='exact'?0:albumEvidence(t.album,c.album,albumReading);
+ const albumBoost=albumScore>0.50;
+ const partialVoice=left.flatMap(x=>right.flatMap(y=>{
+  if(x.actor&&!y.actor&&personEq(x.actor,y.person))return [[x.actor,y.person]];
+  if(y.actor&&!x.actor&&personEq(x.person,y.actor))return [[y.actor,x.person]];
+  return [];
+ }))[0];
+ const voiceReason=partialVoice?'声优 '+partialVoice.join(' 对应 ')+(left.length!==right.length?'，另有 '+Math.abs(left.length-right.length)+' 位歌手':''):'';
+ const albumReason='专辑相似度 '+Math.round(albumScore*100)+'%';
  const fuzzy=!!(title&&fuzzyArtist||fuzzyTitle&&primaryExact||bothFuzzy);
- const albumScore=mode!=='exact'&&!isrc&&!conflict&&!primaryExact&&!artists&&title===3&&left.length&&right.length&&
-  (!t.duration||!c.duration||close)?albumEvidence(t.album,c.album,l,r,albumReading):0;
- const albumAlias=albumScore>=0.60;
- const supported=!!(albumAlias||isrc||title&&(artists&&(!weak||corroborated)||partial||abbreviated)||fuzzy);
+ const supportedWithoutAlbum=!!(isrc||title&&(artists&&(!weak||corroborated)||partial||abbreviated)||fuzzy);
+ const albumAlias=(!t.duration||!c.duration||close)&&albumBoost&&!supportedWithoutAlbum&&!conflict&&
+  (title||primaryExact||partialVoice||titleFit.score>=0.5||artistFit.score>=0.5);
+ const missingEdition=l.version!==r.version&&[l.version,r.version].includes('最終章')&&(!l.version||!r.version);
+ let singleReason='';
+ if(!conflict||missingEdition&&!creditConflict&&roleFits(l,r)&&roleFits(r,l,true)&&!(t.isrc&&c.isrc&&!isrc)){
+  if(title)singleReason=title===3?'歌名一致':'歌名对应';
+  else if(strength>=4)singleReason='完整艺人署名对应';
+  else if(voiceReason)singleReason=voiceReason;
+  else if(albumBoost)singleReason=albumReason;
+  if(singleReason&&title&&voiceReason)singleReason+='，'+voiceReason;
+  if(singleReason&&missingEdition)singleReason+='，'+(r.version?'来源':'目标')+'未标注最終章版本';
+ }
+ const supported=!!(albumAlias||supportedWithoutAlbum);
  const selectable=!conflict&&supported&&(mode!=='exact'||exact||isrc);
  const risk=conflict?'conflict':dictionaryMatch||weak||partial||cvApprox||abbreviated||albumAlias?'credits':fuzzy?'spelling':supported?'consistent':'none';
  const cvPair=cvApprox&&left.flatMap(x=>right.filter(y=>personEq(x.person,y.person)&&closeCV(x.actor,y.actor)&&!personEq(x.actor,y.actor)).map(y=>[x.actor,y.actor]))[0];
  const reason=conflict||(dictionaryMatch?'片假名与英文词典对应，请核对录音及署名':'')||(cvApprox&&!cvPair?'声优一致，角色名拼写接近，需核对':null)||(cvPair?'角色一致，CV 拼写接近：'+personalReading(cvPair[0],l)+' / '+personalReading(cvPair[1],r):'')||(isrc?'录音 ISRC 一致':weak?'声优对应，需核对角色或录音':fuzzy?
   (bothFuzzy?'歌名和主艺人读音均接近，专辑或时长一致':fuzzyTitle?'歌名读音接近，主艺人对应':'歌名对应，主艺人读音接近'):
-  abbreviated?'艺人仅署姓或名：'+primary.person+' / '+other.person:partial?'主艺人对应，合作署名有差异':albumAlias?'歌名一致，专辑相似度 '+Math.round(albumScore*100)+'%，艺人署名待核对':!title?'歌名未对应':!artists?'演唱者不同或署名未确认':
+  abbreviated?'艺人仅署姓或名：'+primary.person+' / '+other.person:partial?'主艺人对应，合作署名有差异':albumAlias?albumReason+'，'+(voiceReason||'歌曲及署名待核对'):!title?'歌名未对应':!artists?'演唱者不同或署名未确认':
   (translatedTitle?'歌名为已核对的双语写法':title===3?'歌名一致':'歌名读音一致')+'，'+(phonetic?'艺人读音一致':'艺人对应'));
  const delta=t.duration>0&&c.duration>0?Math.abs(t.duration-c.duration):Infinity;
- return {c,risk,albumAlias,dictionaryMatch,shortIdentity:abbreviated?latin(personalReading(other.person,r)):null,plausible:!!(title||fuzzyTitle||isrc),priority:selectable?(albumAlias?0.5:dictionaryMatch||fuzzy||partial||weak||cvApprox||abbreviated?1:2):0,exact:exact||isrc,reason,
+ return {c,risk,singleReason,strongEdition:!!title&&strength>=4&&!dictionaryMatch&&!conflict&&left.every(x=>right.some(y=>matched(x,y)>=4&&Boolean(x.actor)===Boolean(y.actor))),albumAlias,dictionaryMatch,shortIdentity:abbreviated?latin(personalReading(other.person,r)):null,plausible:!!(title||fuzzyTitle||isrc||albumAlias),priority:selectable?(albumAlias?0.5:dictionaryMatch||fuzzy||partial||weak||cvApprox||abbreviated?1:2):0,exact:exact||isrc,reason,
   score:(isrc?1000:0)+(title?30:0)+(artists&&!weak?15:primaryExact?10:0)+titleFit.score+artistFit.score+albumScore,album:!!album,delta};
 }
 export async function rank(t,candidates,mode,source,convert,localized=new Map()){
@@ -346,8 +384,10 @@ export async function rank(t,candidates,mode,source,convert,localized=new Map())
  const tied=first?.priority>0&&second?.priority===first.priority&&first.score===second.score&&first.album===second.album&&first.delta===second.delta;
  const ambiguousAlbum=first?.albumAlias&&results.some(x=>x!==first&&x.priority&&x.albumAlias&&norm(x.c.artist)!==norm(first.c.artist));
  const best=first?.priority&&!ambiguousAlbum?first:null;
- const check=best&&(best.priority<=1||tied);
- return {candidate:best?.c,albumAlias:!!best?.albumAlias,dictionaryMatch:!!best?.dictionaryMatch,tied:!!tied,kind:check?'preselected':best?(best.exact?'exact':mode):'review',risk:first?(tied&&first.risk==='consistent'?'spelling':first.risk):'none',
+ const peers=tied?results.filter(x=>x.priority===first.priority&&x.score===first.score&&x.album===first.album&&x.delta===first.delta):[];
+ const sameEdition=tied&&peers.every(x=>x.strongEdition)&&new Set(peers.map(x=>norm(x.c.isrc)).filter(Boolean)).size<=1;
+ const check=best&&(best.priority<=1||tied&&!sameEdition);
+ return {candidate:best?.c,albumAlias:!!best?.albumAlias,dictionaryMatch:!!best?.dictionaryMatch,tied:!!tied,kind:check?'preselected':best?(best.exact?'exact':mode):'review',risk:first?(tied&&!sameEdition&&first.risk==='consistent'?'spelling':first.risk):'none',
   reason:ambiguousAlbum?'同名歌曲及相近专辑对应多个演唱者，请核对艺人':check?'已预选 · '+(tied?'多个候选证据相当，按搜索顺序选中首个发行版本。':'')+first.reason:first?.reason||'未找到歌曲',
   ordered:results.map(x=>({...x.c,matchReason:x.reason}))};
 }
@@ -356,7 +396,7 @@ export async function rank(t,candidates,mode,source,convert,localized=new Map())
 export async function matchTrack(track,mode,convert,search,override,stopped=()=>false,lookupJapanese){
  const modes=mode==='auto'?['exact','smart','romaji']:[mode];
  const pool=new Map(),profiles=new Map();
- let decision;
+ let decision,searchComplete=true;
  const full=originalQuery(track);
  const artists=track.artists?.length?track.artists:splitCredits(track.artist);
  const lead=artists.length>1?originalQuery({name:track.name,artist:artists[0]}):'';
@@ -365,6 +405,11 @@ export async function matchTrack(track,mode,convert,search,override,stopped=()=>
   yield* [...terms,...terms.flatMap(queryForms)];
   if(mode==='exact')return;
   const p=profile(track);
+  if(p.version==='最終章')yield p.base+' '+(track.artist||'');
+  if(modes.includes('romaji')){
+   const mixed=await mixedTitleReading(p.base,convert);
+   if(mixed)yield mixed+(p.version==='伴奏'?' Off Vocal':'');
+  }
   const other=alternateTitle(track.name,p.credits);
   if(other)yield other;
   if(modes.includes('romaji')&&!p.version){
@@ -404,6 +449,7 @@ export async function matchTrack(track,mode,convert,search,override,stopped=()=>
    for await(const page of search(term)){
     if(stopped())break;
     for(const c of page){
+     if(!c.id)continue;
      const prior=pool.get(c.id);
      if(!prior||c.album&&!prior.album)pool.set(c.id,{...c,query:term});
     }
@@ -414,7 +460,7 @@ export async function matchTrack(track,mode,convert,search,override,stopped=()=>
      if(decision.candidate&&decision.risk==='consistent')return decision;
     }
    }
-  }catch(e){if(!pool.size)throw e;break}
+  }catch(e){if(!pool.size)throw e;searchComplete=false;break}
  }
  if(!stopped()&&(!decision?.candidate||decision.albumAlias||decision.dictionaryMatch)&&lookupJapanese&&pool.size){
   const ids=[...pool.keys()].filter(id=>/^\d+$/.test(id)).slice(0,80);
@@ -425,9 +471,9 @@ export async function matchTrack(track,mode,convert,search,override,stopped=()=>
    }
    const m=modes[modes.length-1];
    if(localized.size&&!stopped())decision=await rank(track,[...pool.values()],m,profiles.get(m)||await prepare(track,m,convert,override),convert,localized);
-  }catch{/* Keep the original search results if localized metadata is unavailable. */}
+  }catch{searchComplete=false}
  }
- if(!decision?.candidate&&!stopped()&&pool.size){
+ if(mode!=='exact'&&!decision?.candidate&&!stopped()&&pool.size){
   const m=modes[modes.length-1],source=profiles.get(m);
   const preference=['重新母带','TV Size','Live','原声版','乐队版','Remix','加速版','变速版','独唱版'];
   const alternatives=[];
@@ -436,6 +482,7 @@ export async function matchTrack(track,mode,convert,search,override,stopped=()=>
     const candidate=await prepare(c,m,convert);
     const version=candidate.version;
     const order=preference.findIndex(v=>version===v||version.startsWith(v+' '));
+    if(track.isrc&&c.isrc&&norm(track.isrc)!==norm(c.isrc))continue;
     if(order<0||version.includes(' / ')||/off[\s-]*vocal|instrumental|karaoke|伴奏|カラオケ|翻唱|\bcover\b/i.test(c.name))continue;
     const test=evaluate({...track,isrc:undefined},{...c,isrc:undefined},source,{...candidate,version:''},m==='exact'?'smart':m);
     if(test.priority>0&&test.risk==='consistent')alternatives.push({c,version,order,score:test.score});
@@ -446,6 +493,14 @@ export async function matchTrack(track,mode,convert,search,override,stopped=()=>
   if(best){
    const reason='未找到原版，已预选替代版本：'+best.version;
    decision={candidate:best.c,kind:'preselected',risk:'credits',reason,ordered:[{...best.c,matchReason:reason},...(decision?.ordered||[]).filter(c=>c.id!==best.c.id)]};
+  }
+ }
+ if(!decision?.candidate&&mode!=='exact'&&searchComplete&&!stopped()&&pool.size===1){
+  const c=pool.values().next().value,m=modes.at(-1);
+  const evidence=evaluate(track,c,profiles.get(m),await prepare(c,m,convert),m);
+  if(evidence.singleReason){
+   const reason='唯一候选 · '+evidence.singleReason+'，请核对';
+   decision={candidate:c,kind:'preselected',risk:'credits',reason,ordered:[{...c,matchReason:reason}]};
   }
  }
  decision??={kind:'review',risk:'none',reason:'未找到歌曲',ordered:[]};

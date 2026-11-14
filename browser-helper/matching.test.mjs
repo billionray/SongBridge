@@ -30,7 +30,7 @@ test('日文歌名、艺人、混合文字可分别双向匹配；英文保留',
  await both(song('夜に駆ける','YOASOBI'),song('Yoru ni Kakeru','YOASOBI'),song('Yoru ni Kakeru','Else'),'romaji');
  const localized=song('恋愛パクチー (Off Vocal)','キミのね');
  const fallback=await matchTrack(a,'auto',reading,async function*(){yield [localized]});
- assert.equal(fallback.candidate,undefined);assert.equal(fallback.ordered.length,1);
+ assert.equal(fallback.kind,'preselected');assert.equal(fallback.ordered.length,1);
  assert.equal(originalQuery(b),'RenAi Phakchi Off Vocal Kimi no ne');
 });
 test('角色和声优跨字段对应，不混淆角色版',async()=>{
@@ -61,7 +61,7 @@ test('ISRC、版本并列、长音、修正读音和候选理由',async()=>{
  const other=song('歌','歌手',{id:'bad',isrc:'JP222',album:'A'});
  assert.equal((await match(a,[other])).candidate,undefined);
  await both(a,song('Song','Singer',{isrc:'JP123'}),other,'smart');
- const tied=await match(a,[song('歌','歌手'),song('歌','歌手',{id:'dup'})]);assert.equal(tied.candidate.id,'good');assert.equal(tied.kind,'preselected');
+ const tied=await match(a,[song('歌','歌手'),song('歌','歌手',{id:'dup'})]);assert.equal(tied.candidate.id,'good');assert.equal(tied.risk,'consistent');
  const t=song('夜に駆ける','YOASOBI');
  assert.equal((await match(t,[song('Yoru ni Kaker','YOASOBI')],'romaji')).candidate?.id,'good');
  const p=song('難読','歌手'),c=song('Tōkyō','Singer');
@@ -94,12 +94,12 @@ test('原始完整署名优先，Hello 不因同名或时长相近错选王杰',
  assert.deepEqual(fallbackTerms,['Hello Furui Riho knoak','Hello Furui Riho']);
  assert.equal(fallback.candidate.id,right.id);assert.equal(fallback.risk,'credits');
  const onlyWrong=await matchTrack(t,'auto',reading,async function*(){yield [wrong]});
- assert.equal(onlyWrong.candidate,undefined);assert.equal(onlyWrong.ordered[0].id,wrong.id);
+ assert.equal(onlyWrong.kind,'preselected');assert.equal(onlyWrong.ordered[0].id,wrong.id);
 });
 test('独立英文译名保留原始查询候选供手选',async()=>{
  const t=song('夜に駆ける','YOASOBI'),c=song('Into the Night','YOASOBI');
  const d=await matchTrack(t,'auto',reading,async function*(q){yield q==='夜に駆ける YOASOBI'?[c]:[]});
- assert.equal(d.candidate,undefined);assert.equal(d.ordered[0].id,c.id);assert.match(d.reason,/核对搜索结果/);
+ assert.equal(d.kind,'preselected');assert.equal(d.ordered[0].id,c.id);assert.match(d.reason,/唯一候选/);
 });
 
 test('歌名与主艺人分别近似，短字段和双近似需要独立佐证',async()=>{
@@ -137,7 +137,7 @@ test('原文与仅歌名查询翻页，修正读音只参与比对，手选保�
 test('同一录音按专辑、时长距离和原始顺序选择发行版',async()=>{
  const t=song('Hello','Furui Riho',{album:'A',duration:100000});
  const list=[['other','B',100000],['far','A',102300],['near','A',101000],['tie','A',99000]].map(([id,album,duration])=>({...t,id,album,duration}));
- const result=await match(t,list,'smart');assert.equal(result.candidate.id,'near');assert.equal(result.risk,'spelling');
+ const result=await match(t,list,'smart');assert.equal(result.candidate.id,'near');assert.equal(result.risk,'consistent');
 });
 
 test('艺名、角色及声优分字段换序，CV 近似标橙，完整署名优先',async()=>{
@@ -203,7 +203,7 @@ test('独立英文标题由同一目录 ID 的日区元数据确认，保留国�
  const t=song('衛星','kakizaki yuta'),cn=song('Satellite','Kakizaki Yuta',{id:'6786947771'});
  const run=(name,id)=>matchTrack(t,'auto',reading,async function*(){yield [{...cn,name}]},undefined,undefined,async()=>[{id,name:'衛星',artist:'柿崎ユウタ'}]);
  const m=await run('Satellite',cn.id);assert.equal(m.candidate.name,'Satellite');assert.equal(m.candidate.id,cn.id);assert.match(m.reason,/日区/);
- assert.equal((await run('Satellite','12345')).candidate,undefined);
+ assert.match((await run('Satellite','12345')).reason,/唯一候选/);
  assert.equal((await run('Satellite (Live)',cn.id)).candidate,undefined);
 });
 
@@ -236,7 +236,7 @@ test('艺人别名可由同名歌曲和高相似专辑预选，保留精确模�
  for(const patch of [{name:'三年二班 (Live)'},{album:'其他专辑'},{duration:300000},{name:'另一首'}]){
   assert.equal((await match(t,[{...c,...patch}])).candidate,undefined);
  }
- for(const album of ['Greatest Hits','三年二班','']){
+ for(const album of ['Greatest Hits','Single','']){
   assert.equal((await match({...t,album},[{...c,album}])).candidate,undefined);
  }
  assert.equal((await match(t,[c,{...c,id:'cover',artist:'Another singer'}])).candidate,undefined);
@@ -247,7 +247,7 @@ test('艺人别名可由同名歌曲和高相似专辑预选，保留精确模�
  assert.equal(result.candidate.id,'original');
 });
 
-test('专辑相似度达到 60% 时预选，低于阈值时保留手选',async()=>{
+test('专辑相似度大于 50% 时加分，恰好 50% 不加分',async()=>{
  const source=song('光','甲',{album:'春夏秋冬夜'});
  const candidate=album=>song('光','Artist B',{album});
  const edge=await match(source,[candidate('春夏秋晨曦')]);
@@ -338,4 +338,39 @@ test('词典能同时转换未登记的歌名和组合艺名，只有目标完�
   assert.equal(wrong.candidate,undefined);
   assert.equal((await match(source,[{...target,name:target.name+' (Live)'}],'romaji')).candidate,undefined);
  }
+});
+
+test('七组手选的双向结果和核对原因，按 ID 合并重复页面',async()=>{
+ const pairs=[
+  [song('RenAi Phakchi - Off Vocal','キミのね',{album:'Laid Back Journey'}),song('恋愛パクチー (Off Vocal)','キミのね'),'credits'],
+  [song('止マレ!','涼宮ハルヒ (CV.平野 綾)',{album:'止マレ!'}),song('止マレ!','Aya Hirano、Minori Chihara、後藤邑子',{album:'涼宮ハルヒの完奏～コンプリートサウンドトラック～',duration:234000}),'credits',/平野 綾.*Aya Hirano|Aya Hirano.*平野 綾/],
+  [song('Enter Enter MISSION! - 最終章ver.','あんこうチーム',{album:'Enter Enter MISSION! (最終章ver.)'}),song('Enter Enter MISSION!','あんこうチーム'),'credits',/未标注最終章/],
+  [song('Odore glockenspiel','Sharou',{album:'Odore glockenspiel'}),song('おどれグロッケンシュピール','しゃろう'),'credits'],
+  [song('どう考えても私は悪くない','Kuroneko',{album:'7S'}),song('どう考えても私は悪くない','96猫'),'consistent'],
+  [song('Let There Be Light Again','落日飛車 Sunset Rollercoaster',{album:'Let There Be Light Again'}),song('Let There Be Light Again','落日飞车',{album:'Let There Be Light Again - Single',duration:227000}),'consistent'],
+  [song('Hello Alone','Yukinoshitayukino(CV.HayamiSaori) / Yuigahamayui(CV.ToyamaNao)',{album:'Hello Alone'}),song('Hello Alone','雪ノ下雪乃(CV.早見沙織)、由比ヶ浜結衣(CV.東山奈央)',{album:'Hello Alone',duration:279000}),'consistent']
+ ];
+ for(const [a,b,risk,reason] of pairs)for(const [source,target] of [[a,b],[b,a]]){
+  const result=await matchTrack(source,'auto',reading,async function*(){yield [target];yield [target]});
+  assert.equal(result.candidate?.id,target.id,source.name+' '+result.reason);
+  assert.equal(result.risk,risk,source.name+' '+result.reason);
+  if(reason)assert.match(result.reason,reason);
+ }
+});
+test('唯一候选回退只使用完整搜索，排除无关结果、明确冲突和精确模式',async()=>{
+ const track=song('One','Alpha'),other=song('Other','Alpha');
+ const run=(source,candidate,mode='auto')=>matchTrack(source,mode,reading,async function*(){yield [candidate]});
+ for(const [source,candidate] of [[track,song('Other','Beta')],[song('One (Off Vocal)','Alpha'),track],
+  [song('One','Role (CV: Anna)'),song('One','Role (CV: Dora)')],
+  [{...track,isrc:'XX1'},{...track,isrc:'XX2'}]]){
+  assert.equal((await run(source,candidate)).candidate,undefined);
+ }
+ assert.equal((await run(track,other,'exact')).candidate,undefined);
+ const broken=await matchTrack(track,'auto',reading,async function*(){yield [other];throw Error('search interrupted')});
+ assert.equal(broken.candidate,undefined);
+ let stop=false;
+ const stopped=await matchTrack(track,'auto',reading,async function*(){yield [other];stop=true},undefined,()=>stop);
+ assert.equal(stopped.candidate,undefined);
+ const tied=await match(track,[{...track,isrc:'XX1'},{...track,id:'other',isrc:'XX2'}]);
+ assert.equal(tied.kind,'preselected');
 });
