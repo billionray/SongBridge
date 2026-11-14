@@ -1,4 +1,4 @@
-import {originalQuery} from './matching.mjs';
+import {originalQuery,searchText} from './matching.mjs';
 import {songId} from './core.mjs';
 
 export const songRows=page=>page.locator('[data-testid="section-container"][aria-label="歌曲"], [data-testid="section-container"][aria-label="Songs"]').locator('[data-testid="track-lockup"]');
@@ -13,6 +13,8 @@ export function search(page,query,expanded=false,stopped){
  return retryRead(()=>searchOnce(page,query,expanded),ms=>page.waitForTimeout(ms),stopped);
 }
 async function searchOnce(page,query,expanded){
+ query=searchText(query);
+ if(!query)return [];
  await page.goto('https://music.apple.com/cn/search?term='+encodeURIComponent(query),{waitUntil:'commit',timeout:18000});
  await page.waitForURL(u=>u.pathname==='/cn/search'&&u.searchParams.get('term')===query,{waitUntil:'commit',timeout:9000});
  if(!new URL(page.url()).pathname.startsWith('/cn/'))throw Error('网页跳转到了非中国大陆区，请先检查账户地区');

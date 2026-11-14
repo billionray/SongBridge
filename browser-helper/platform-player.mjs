@@ -1,4 +1,4 @@
-import {matchTrack} from './matching.mjs';
+import {matchTrack,searchText} from './matching.mjs';
 import {reading} from './reading.mjs';
 import {readPlayer,spotifyRows} from './spotify-player.mjs';
 
@@ -87,6 +87,8 @@ export async function readList(page,platform,link){
  return {schemaVersion:1,name,source:{platform,url},tracks,warning:expected===null?'已读取 '+tracks.length+' 首；网页未显示总数。':''};
 }
 export async function searchPlayer(page,platform,query){
+ query=searchText(query);
+ if(!query)return [];
  const sp=platform==='spotify';
  await page.goto(sp?hosts.spotify+'/search/'+encodeURIComponent(query)+'/tracks':hosts.ytmusic+'/search?q='+encodeURIComponent(query)+'&sp=EgWKAQIIAWoKEAkQBRAKEAMQBA%3D%3D',{waitUntil:'domcontentloaded'});
  const rows=page.locator(sp?'[data-testid="tracklist-row"]':'ytmusic-search-page '+youtubeRows);

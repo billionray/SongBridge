@@ -31,7 +31,7 @@ test('日文歌名、艺人、混合文字可分别双向匹配；英文保留',
  const localized=song('恋愛パクチー (Off Vocal)','キミのね');
  const fallback=await matchTrack(a,'auto',reading,async function*(){yield [localized]});
  assert.equal(fallback.candidate,undefined);assert.equal(fallback.ordered.length,1);
- assert.equal(originalQuery(b),b.name+' '+b.artist);
+ assert.equal(originalQuery(b),'RenAi Phakchi Off Vocal Kimi no ne');
 });
 test('角色和声优跨字段对应，不混淆角色版',async()=>{
  const t=song('ハレ晴レユカイ～Ver.長門有希～','長門有希 (CV.茅原実里)');
@@ -86,12 +86,12 @@ test('原始完整署名优先，Hello 不因同名或时长相近错选王杰',
  const wrong=song('Hello','王杰',{id:'wrong',album:'Hello',duration:200100}),right=song('Hello','Furui Riho',{id:'1820346750'});
  const terms=[];
  const d=await matchTrack(t,'auto',reading,async function*(q){terms.push(q);yield [wrong,right]});
- assert.deepEqual(terms,['Hello Furui Riho / knoak']);assert.equal(d.candidate.id,right.id);assert.equal(d.risk,'credits');
+ assert.deepEqual(terms,['Hello Furui Riho knoak']);assert.equal(d.candidate.id,right.id);assert.equal(d.risk,'credits');
  const fallbackTerms=[];
  const fallback=await matchTrack(t,'auto',reading,async function*(term){
   fallbackTerms.push(term);yield term==='Hello Furui Riho'?[right]:[wrong];
  });
- assert.deepEqual(fallbackTerms,['Hello Furui Riho / knoak','Hello Furui Riho']);
+ assert.deepEqual(fallbackTerms,['Hello Furui Riho knoak','Hello Furui Riho']);
  assert.equal(fallback.candidate.id,right.id);assert.equal(fallback.risk,'credits');
  const onlyWrong=await matchTrack(t,'auto',reading,async function*(){yield [wrong]});
  assert.equal(onlyWrong.candidate,undefined);assert.equal(onlyWrong.ordered[0].id,wrong.id);
@@ -132,7 +132,7 @@ test('原文与仅歌名查询翻页，修正读音只参与比对，手选保�
   },{name:'Yomikata',artist:'Singer'});
   assert.equal(result.candidate,undefined);assert.deepEqual(result.ordered.map(c=>c.id),['first','second']);
  }
- assert.deepEqual(terms,Array.from({length:4},()=>['難読 (Live) 歌手 / 別名','難読 (Live) 歌手','難読 (Live)','难読 (Live) 歌手 / 别名','难読 (Live) 歌手','难読 (Live)']).flat());assert.equal(originalQuery(song('Hello','')),'Hello');
+ assert.deepEqual(terms,Array.from({length:4},()=>['難読 Live 歌手 別名','難読 Live 歌手','難読 Live','难読 Live 歌手 别名','难読 Live 歌手','难読 Live']).flat());assert.equal(originalQuery(song('Hello','')),'Hello');
 });
 test('同一录音按专辑、时长距离和原始顺序选择发行版',async()=>{
  const t=song('Hello','Furui Riho',{album:'A',duration:100000});
@@ -189,10 +189,10 @@ test('仅歌名补搜可选中并按命中词定位，排除同名错误艺人',
  assert.deepEqual(none,['Solo']);
 });
 
-test('星号保留在查询与匹配中；简称有唯一全名时才预选',async()=>{
+test('查询与匹配忽略星号；简称有唯一全名时才预选',async()=>{
  const t=song('もうそう☆えくすぷれす','Sasaki Sayaka');
- assert.equal(originalQuery(t),'もうそう☆えくすぷれす Sasaki Sayaka');
- const short=song(t.name,'Sayaka',{id:'one'});
+ assert.equal(originalQuery(t),'もうそうえくすぷれす Sasaki Sayaka');
+ const short=song('もうそうえくすぷれす','Sayaka',{id:'one'});
  for(const [a,b] of [[t,short],[short,t]]){
   const m=await match(a,[b],'romaji');assert.equal(m.candidate?.id,b.id);assert.equal(m.risk,'credits');
  }
@@ -284,17 +284,30 @@ test('九组已核对的跨平台署名均能从目标标题搜回，双向确�
  ];
  for(const [a,b] of pairs)for(const [source,target] of [[a,b],[b,a]]){
   const result=await matchTrack(source,'auto',reading,async function*(term){
-   yield term===target.name?[{...target,id:'cover',artist:'Other Singer'},target]:[];
+   yield term===originalQuery({name:target.name})?[{...target,id:'cover',artist:'Other Singer'},target]:[];
   });
   assert.equal(result.candidate?.id,'good',source.name+' → '+target.name+' '+result.reason);
-  assert.equal(result.candidate.query,target.name);
+  assert.equal(result.candidate.query,originalQuery({name:target.name}));
  }
 });
 
-test('符号有辨识作用，不能把不同标题按精确或读音自动合并',async()=>{
- for(const [a,b] of [['S☆S','SS'],['S▽S','S△S'],['C++','C'],['☆','★'],['星☆空','星空']]){
-  const result=await matchTrack(song(a,'Singer'),'auto',reading,async function*(){yield [song(b,'Singer')]});
-  assert.equal(result.candidate,undefined,a);
+test('所有查询及比对忽略符号，纯符号标题不会提供身份证据',async()=>{
+ for(const [a,b] of [['S☆S','SS'],['S▽S','S△S'],['C++','C'],['星☆空','星空']]){
+  for(const [source,target] of [[a,b],[b,a]]){
+   const result=await matchTrack(song(source,'A+B'),'auto',reading,async function*(term){
+    assert.doesNotMatch(term,/[\p{P}\p{S}]/u);yield [song(target,'AB')];
+   });
+   assert.equal(result.kind,'exact',source);
+  }
+ }
+ assert.equal((await match(song('☆','A'),[song('★','A')])).candidate,undefined);
+});
+test('片假名外来词使用英文原拼写双向补搜，并核对艺人',async()=>{
+ for(const [a,b] of [['チョコレート','Chocolate'],['Chocolate','チョコレート']]){
+  const result=await matchTrack(song(a,'Singer'),'auto',reading,async function*(term){
+   yield term===b?[song(b,'Other',{id:'wrong'}),song(b,'Singer')]:[];
+  });
+  assert.equal(result.candidate?.id,'good');
  }
 });
 

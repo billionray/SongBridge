@@ -1,5 +1,5 @@
 import {createHash} from 'node:crypto';
-export const normalize=s=>String(s??'').normalize('NFKC').toLowerCase().replace(/\s/gu,'');
+export const normalize=s=>String(s??'').normalize('NFKC').toLowerCase().replace(/[\s\p{P}\p{S}\uFE0E\uFE0F\u200D]/gu,'');
 export function artists(s){return String(s??'').split(/\s*\/\s*|、|，|,|\s+&\s+/).map(normalize).filter(Boolean).sort();}
 export function exactMatch(source,candidate){
  const a=artists(source.artist),b=artists(candidate.artist);

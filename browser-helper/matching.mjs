@@ -5,13 +5,13 @@ import {Converter as TraditionalConverter} from 'opencc-js/cn2t';
 const simplify=Converter({from:'tw',to:'cn'});
 const traditional=TraditionalConverter({from:'cn',to:'tw'});
 const clean=s=>String(s??'').normalize('NFKC').trim();
-const norm=s=>simplify(clean(s)).toLowerCase().replace(/\s/gu,'');
+export const searchText=s=>clean(s).replace(/[\p{P}\p{S}\uFE0E\uFE0F\u200D]/gu,'').replace(/\s+/gu,' ').trim();
+const norm=s=>simplify(searchText(s)).toLowerCase().replaceAll(' ','');
 function queryForms(query){
  if(!/\p{Script=Han}/u.test(query)||/[\p{Script=Hiragana}\p{Script=Katakana}]/u.test(query))return [query];
  return [...new Set([query,simplify(query),traditional(query)])];
 }
 
-const symbols=s=>clean(s).match(/[\p{P}\p{S}]/gu)?.join('')||'';
 const japanese=/[\u3040-\u30ff\u3400-\u9fff]/u;
 const cv=/^(?:cv|声優|声优)\s*[.:・]?\s*(.+)$/i;
 const versions=[
@@ -49,6 +49,15 @@ const artistSpellings=[
 function spellings(value){
  const key=norm(value);
  return artistSpellings.find(group=>group.some(name=>norm(name)===key))||[value];
+}
+// Whole title equivalents only. Keep the normal artist and version checks.
+const loanwordTitles=[['ブレンド','Blend'],['プリンセス','Princess'],['ミュージック','Music'],['チョコレート','Chocolate']];
+function loanwordTitle(value){
+ for(const [kana,english] of loanwordTitles){
+  if(norm(value)===norm(kana))return english;
+  if(norm(value)===norm(english))return kana;
+ }
+ return '';
 }
 const titleSpellings=[
  ['IOSYS','明日なき暴走！クラウンピースを追い詰めろ','Ashita naki Boso! ClownPiece wo Oitsumero'],
@@ -147,7 +156,7 @@ export async function prepare(t,mode,convert,override={}){
  }
  return {...p,readings,personReadings};
 }
-export const originalQuery=t=>[t.name,t.artist||t.artists?.join(' / ')].filter(Boolean).join(' ').trim();
+export const originalQuery=t=>searchText([t.name,t.artist||t.artists?.join(' / ')].filter(Boolean).join(' '));
 const latin=s=>norm(s.normalize('NFD').replace(/\p{M}/gu,'')).replace(/ou|oo/g,'o').replace(/uu/g,'u').replace(/shi/g,'si').replace(/chi/g,'ti').replace(/tsu/g,'tu').replace(/fu/g,'hu');
 // Normalized edit distance lets one misread syllable affect just that field.
 function phoneticSimilarity(a,b,left,right){
@@ -187,9 +196,9 @@ function albumEvidence(a,b,left,right,readingScore){
  return Math.max(textSimilarity(x,y),readingScore);
 }
 function compare(a,b,left,right){
- if(!a||!b)return 0;if(norm(a)===norm(b))return 3;
+ if(!norm(a)||!norm(b))return 0;if(norm(a)===norm(b))return 3;
  const x=left.readings?.get(a)||a,y=right.readings?.get(b)||b;
- if(symbols(a)!==symbols(b)||japanese.test(x)||japanese.test(y))return 0;
+ if(japanese.test(x)||japanese.test(y))return 0;
  if(norm(x)===norm(y))return 2;
  return latin(x)===latin(y)?1:0;
 }
@@ -214,11 +223,13 @@ function namePairs(name,p){
  return tokens.slice(1).map((_,i)=>[tokens.slice(0,i+1).join(''),tokens.slice(i+1).join('')]);
 }
 function evaluate(t,c,l,r,mode){
- const eq=(a,b)=>mode==='romaji'?compare(a,b,l,r):Number(!!a&&!!b&&norm(a)===norm(b))*3;
+ const eq=(a,b)=>mode==='romaji'?compare(a,b,l,r):Number(!!norm(a)&&norm(a)===norm(b))*3;
  const literalTitle=eq(l.base,r.base);
  const translation=mode==='exact'?'':alternateTitle(l.base,l.credits);
  const confirmedTitle=!!translation&&norm(translation)===norm(r.base)&&norm(alternateTitle(r.base,r.credits))===norm(l.base);
- const title=literalTitle||(confirmedTitle?2:0);
+ const loanword=mode==='romaji'&&loanwordTitle(l.base);
+ const translatedTitle=confirmedTitle||Boolean(loanword&&norm(loanword)===norm(r.base));
+ const title=literalTitle||(translatedTitle?2:0);
  const isrc=!!t.isrc&&!!c.isrc&&norm(t.isrc)===norm(c.isrc);
  const albumReading=mode==='romaji'?albumReadingScore(t.album,c.album,l,r):0;
  const album=!!t.album&&(norm(t.album)===norm(c.album)||albumReading===1);
@@ -226,12 +237,11 @@ function evaluate(t,c,l,r,mode){
  const corroborated=album||close;
  let conflict='';
  const personEq=(a,b)=>{
-  if(!a||!b)return 0;
+  if(!norm(a)||!norm(b))return 0;
   if(mode!=='exact'&&spellings(a).some(s=>norm(s)===norm(b)))return norm(a)===norm(b)?3:2;
   if(mode!=='romaji')return eq(a,b);
   const x=personalReading(a,l),y=personalReading(b,r);
   if(norm(a)===norm(b))return 3;
-  if(symbols(a)!==symbols(b))return 0;
   if(latin(x)===latin(y))return 2;
   return namePairs(a,l).some(([family,given])=>namePairs(b,r).some(([first,last])=>family===last&&given===first))?2:0;
  };
@@ -284,8 +294,8 @@ function evaluate(t,c,l,r,mode){
   phoneticSimilarity(primary.person,other.person,l,r):{score:0,length:0};
  const passes=f=>f.score>=0.80&&(f.length>=8||corroborated);
 
- const fuzzyTitle=!title&&symbols(l.base)===symbols(r.base)&&passes(titleFit);
- const fuzzyArtist=!primaryExact&&symbols(primary?.person)===symbols(other?.person)&&passes(artistFit);
+ const fuzzyTitle=!title&&passes(titleFit);
+ const fuzzyArtist=!primaryExact&&passes(artistFit);
  const bothFuzzy=fuzzyTitle&&fuzzyArtist&&corroborated&&[titleFit,artistFit].every(f=>f.score>=0.85&&f.length>=8);
  const creditConflict=left.some(x=>right.some(y=>x.actor&&y.actor&&(
   personEq(x.person,y.person)&&!personEq(x.actor,y.actor)||personEq(x.actor,y.actor)&&x.person&&y.person&&!personEq(x.person,y.person)
@@ -307,7 +317,7 @@ function evaluate(t,c,l,r,mode){
  const reason=conflict||(cvApprox&&!cvPair?'声优一致，角色名拼写接近，需核对':null)||(cvPair?'角色一致，CV 拼写接近：'+personalReading(cvPair[0],l)+' / '+personalReading(cvPair[1],r):'')||(isrc?'录音 ISRC 一致':weak?'声优对应，需核对角色或录音':fuzzy?
   (bothFuzzy?'歌名和主艺人读音均接近，专辑或时长一致':fuzzyTitle?'歌名读音接近，主艺人对应':'歌名对应，主艺人读音接近'):
   abbreviated?'艺人仅署姓或名：'+primary.person+' / '+other.person:partial?'主艺人对应，合作署名有差异':albumAlias?'歌名一致，专辑相似度 '+Math.round(albumScore*100)+'%，艺人署名待核对':!title?'歌名未对应':!artists?'演唱者不同或署名未确认':
-  (confirmedTitle?'歌名为已核对的双语写法':title===3?'歌名一致':'歌名读音一致')+'，'+(phonetic?'艺人读音一致':'艺人对应'));
+  (translatedTitle?'歌名为已核对的双语写法':title===3?'歌名一致':'歌名读音一致')+'，'+(phonetic?'艺人读音一致':'艺人对应'));
  const delta=t.duration>0&&c.duration>0?Math.abs(t.duration-c.duration):Infinity;
  return {c,risk,albumAlias,shortIdentity:abbreviated?latin(personalReading(other.person,r)):null,plausible:!!(title||fuzzyTitle||isrc),priority:selectable?(albumAlias?0.5:fuzzy||partial||weak||cvApprox||abbreviated?1:2):0,exact:exact||isrc,reason,
   score:(isrc?1000:0)+(title?30:0)+(artists&&!weak?15:primaryExact?10:0)+titleFit.score+artistFit.score+albumScore,album:!!album,delta};
@@ -363,6 +373,8 @@ export async function matchTrack(track,mode,convert,search,override,stopped=()=>
   const p=profile(track);
   const other=alternateTitle(track.name,p.credits);
   if(other)yield other;
+  const loanword=loanwordTitle(track.name);
+  if(loanword&&modes.includes('romaji'))yield loanword;
   for(const person of spellings(p.credits[0]?.person||'')){
    if(person&&person!==p.credits[0]?.person)yield track.name+' '+person;
   }
@@ -370,9 +382,9 @@ export async function matchTrack(track,mode,convert,search,override,stopped=()=>
   if(japanese.test(track.name)){
    const roman=await convert(track.name);
    if(roman)yield roman.trim();
-  }else if(/^[a-z ]{3,48}$/i.test(track.name)){
+  }else if(/^[a-z ]{3,48}$/i.test(searchText(track.name))){
    // Only propose kana when every letter can be read and round-tripped.
-   const compact=track.name.toLowerCase().replaceAll(' ','');
+   const compact=searchText(track.name).toLowerCase().replaceAll(' ','');
    const kana=toHiragana(compact);
    if(/^[ぁ-ゖー]+$/.test(kana)&&toRomaji(kana)===compact){
     yield kana;
@@ -381,8 +393,9 @@ export async function matchTrack(track,mode,convert,search,override,stopped=()=>
   }
  }
  const searched=new Set();
- for await(const term of queries()){
-  if(searched.has(term))continue;
+ for await(const raw of queries()){
+  const term=searchText(raw);
+  if(!term||searched.has(term))continue;
   searched.add(term);
   if(stopped()||decision?.candidate&&!decision.albumAlias)break;
   try{
