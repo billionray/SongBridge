@@ -305,7 +305,7 @@ test('所有查询及比对忽略符号，纯符号标题不会提供身份证�
 test('片假名外来词使用英文原拼写双向补搜，并核对艺人',async()=>{
  for(const [a,b] of [['チョコレート','Chocolate'],['Chocolate','チョコレート']]){
   const result=await matchTrack(song(a,'Singer'),'auto',reading,async function*(term){
-   yield term===b?[song(b,'Other',{id:'wrong'}),song(b,'Singer')]:[];
+   yield term.toLowerCase()===b.toLowerCase()?[song(b,'Other',{id:'wrong'}),song(b,'Singer')]:[];
   });
   assert.equal(result.candidate?.id,'good');
  }
@@ -323,4 +323,19 @@ test('未登记的罗马字歌名和片假名可双向补搜，保留声优冲�
  const b=song('曲▽','甲(声乙)、乙(声甲)');
  assert.equal((await match(a,[b],'romaji')).candidate,undefined);
  assert.equal((await reading('星☆空')).includes('☆'),true);
+});
+
+test('词典能同时转换未登记的歌名和组合艺名，只有目标完整查询返回候选',async()=>{
+ const english=song('Symphony','Ocean Guitar'),kana=song('シンフォニー','オーシャン・ギター');
+ for(const [source,target] of [[english,kana],[kana,english]]){
+  const result=await matchTrack(source,'auto',reading,async function*(q){
+   yield q.toLowerCase()===originalQuery(target).toLowerCase()?[{...target,id:'wrong',artist:'Other'},target]:[];
+  });
+  assert.equal(result.candidate?.id,'good');
+  assert.equal(result.kind,'preselected');
+  assert.match(result.reason,/词典/);
+  const wrong=await match(source,[{...target,artist:'Different Singer'}],'romaji');
+  assert.equal(wrong.candidate,undefined);
+  assert.equal((await match(source,[{...target,name:target.name+' (Live)'}],'romaji')).candidate,undefined);
+ }
 });

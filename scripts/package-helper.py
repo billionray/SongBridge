@@ -7,7 +7,7 @@ from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 root = Path(__file__).resolve().parents[1]
 source = root / "browser-helper"
-files = """LICENSE README.md batch.mjs batch.test.mjs core.mjs matching.mjs matching.test.mjs membership.mjs origins.mjs
+files = """LICENSE README.md loanwords.tsv loanwords-NOTICE.txt loanwords.mjs batch.mjs batch.test.mjs core.mjs matching.mjs matching.test.mjs membership.mjs origins.mjs
 package.json package-lock.json platform.mjs platform-player.mjs policy.mjs proxy.mjs proxy.test.mjs
 reading.mjs server.mjs spotify-player.mjs start.command start.mjs start.ps1 start.sh
 tests.mjs web.mjs""".split()

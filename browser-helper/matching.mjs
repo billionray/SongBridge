@@ -1,3 +1,4 @@
+import {dictionaryForms,dictionaryPair} from './loanwords.mjs';
 import {toHiragana, toKatakana, toRomaji} from 'wanakana';
 import {Converter} from 'opencc-js/t2cn';
 import {Converter as TraditionalConverter} from 'opencc-js/cn2t';
@@ -49,15 +50,6 @@ const artistSpellings=[
 function spellings(value){
  const key=norm(value);
  return artistSpellings.find(group=>group.some(name=>norm(name)===key))||[value];
-}
-// Whole title equivalents only. Keep the normal artist and version checks.
-const loanwordTitles=[['ブレンド','Blend'],['プリンセス','Princess'],['ミュージック','Music'],['チョコレート','Chocolate']];
-function loanwordTitle(value){
- for(const [kana,english] of loanwordTitles){
-  if(norm(value)===norm(kana))return english;
-  if(norm(value)===norm(english))return kana;
- }
- return '';
 }
 const titleSpellings=[
  ['IOSYS','明日なき暴走！クラウンピースを追い詰めろ','Ashita naki Boso! ClownPiece wo Oitsumero'],
@@ -227,8 +219,8 @@ function evaluate(t,c,l,r,mode){
  const literalTitle=eq(l.base,r.base);
  const translation=mode==='exact'?'':alternateTitle(l.base,l.credits);
  const confirmedTitle=!!translation&&norm(translation)===norm(r.base)&&norm(alternateTitle(r.base,r.credits))===norm(l.base);
- const loanword=mode==='romaji'&&loanwordTitle(l.base);
- const translatedTitle=confirmedTitle||Boolean(loanword&&norm(loanword)===norm(r.base));
+ const dictionaryTitle=mode==='romaji'&&!literalTitle&&!confirmedTitle&&dictionaryPair(l.base,r.base);
+ const translatedTitle=confirmedTitle||dictionaryTitle;
  const title=literalTitle||(translatedTitle?2:0);
  const isrc=!!t.isrc&&!!c.isrc&&norm(t.isrc)===norm(c.isrc);
  const albumReading=mode==='romaji'?albumReadingScore(t.album,c.album,l,r):0;
@@ -243,6 +235,7 @@ function evaluate(t,c,l,r,mode){
   const x=personalReading(a,l),y=personalReading(b,r);
   if(norm(a)===norm(b))return 3;
   if(latin(x)===latin(y))return 2;
+  if(dictionaryPair(a,b))return 1;
   return namePairs(a,l).some(([family,given])=>namePairs(b,r).some(([first,last])=>family===last&&given===first))?2:0;
  };
  const closeCV=(a,b)=>mode==='romaji'&&namePairs(a,l).some(([x,y])=>namePairs(b,r).some(([u,v])=>
@@ -250,7 +243,7 @@ function evaluate(t,c,l,r,mode){
  const matched=(a,b)=>{
   const identity=personEq(a.person,b.person),voice=personEq(a.actor,b.person)||personEq(a.person,b.actor)||personEq(a.actor,b.actor);
   if(identity&&a.actor&&b.actor&&!personEq(a.actor,b.actor))return closeCV(a.actor,b.actor)?3:0;
-  if(identity)return identity===3?6:4;
+  if(identity)return identity===3?6:identity===2?4:2;
   if(a.person&&b.person&&a.actor&&b.actor){
    // A one-letter difference in a character's family or given name needs the same actor.
    if(mode==='romaji'&&title&&personEq(a.actor,b.actor)){
@@ -279,7 +272,8 @@ function evaluate(t,c,l,r,mode){
   }
   return left.every((_,i)=>assign(i,new Set()));
  }
- const strength=[6,4,3,1].find(pairCredits)||0;
+ const strength=[6,4,3,2,1].find(pairCredits)||0;
+ const dictionaryMatch=dictionaryTitle||strength===2;
  const artists=strength>0,weak=strength===1,cvApprox=strength===3,phonetic=strength===4;
  const primary=left[0],other=right[0];
  const primaryExact=!!primary&&right.some(y=>matched(primary,y)>=4);
@@ -312,14 +306,14 @@ function evaluate(t,c,l,r,mode){
  const albumAlias=albumScore>=0.60;
  const supported=!!(albumAlias||isrc||title&&(artists&&(!weak||corroborated)||partial||abbreviated)||fuzzy);
  const selectable=!conflict&&supported&&(mode!=='exact'||exact||isrc);
- const risk=conflict?'conflict':weak||partial||cvApprox||abbreviated||albumAlias?'credits':fuzzy?'spelling':supported?'consistent':'none';
+ const risk=conflict?'conflict':dictionaryMatch||weak||partial||cvApprox||abbreviated||albumAlias?'credits':fuzzy?'spelling':supported?'consistent':'none';
  const cvPair=cvApprox&&left.flatMap(x=>right.filter(y=>personEq(x.person,y.person)&&closeCV(x.actor,y.actor)&&!personEq(x.actor,y.actor)).map(y=>[x.actor,y.actor]))[0];
- const reason=conflict||(cvApprox&&!cvPair?'声优一致，角色名拼写接近，需核对':null)||(cvPair?'角色一致，CV 拼写接近：'+personalReading(cvPair[0],l)+' / '+personalReading(cvPair[1],r):'')||(isrc?'录音 ISRC 一致':weak?'声优对应，需核对角色或录音':fuzzy?
+ const reason=conflict||(dictionaryMatch?'片假名与英文词典对应，请核对录音及署名':'')||(cvApprox&&!cvPair?'声优一致，角色名拼写接近，需核对':null)||(cvPair?'角色一致，CV 拼写接近：'+personalReading(cvPair[0],l)+' / '+personalReading(cvPair[1],r):'')||(isrc?'录音 ISRC 一致':weak?'声优对应，需核对角色或录音':fuzzy?
   (bothFuzzy?'歌名和主艺人读音均接近，专辑或时长一致':fuzzyTitle?'歌名读音接近，主艺人对应':'歌名对应，主艺人读音接近'):
   abbreviated?'艺人仅署姓或名：'+primary.person+' / '+other.person:partial?'主艺人对应，合作署名有差异':albumAlias?'歌名一致，专辑相似度 '+Math.round(albumScore*100)+'%，艺人署名待核对':!title?'歌名未对应':!artists?'演唱者不同或署名未确认':
   (translatedTitle?'歌名为已核对的双语写法':title===3?'歌名一致':'歌名读音一致')+'，'+(phonetic?'艺人读音一致':'艺人对应'));
  const delta=t.duration>0&&c.duration>0?Math.abs(t.duration-c.duration):Infinity;
- return {c,risk,albumAlias,shortIdentity:abbreviated?latin(personalReading(other.person,r)):null,plausible:!!(title||fuzzyTitle||isrc),priority:selectable?(albumAlias?0.5:fuzzy||partial||weak||cvApprox||abbreviated?1:2):0,exact:exact||isrc,reason,
+ return {c,risk,albumAlias,dictionaryMatch,shortIdentity:abbreviated?latin(personalReading(other.person,r)):null,plausible:!!(title||fuzzyTitle||isrc),priority:selectable?(albumAlias?0.5:dictionaryMatch||fuzzy||partial||weak||cvApprox||abbreviated?1:2):0,exact:exact||isrc,reason,
   score:(isrc?1000:0)+(title?30:0)+(artists&&!weak?15:primaryExact?10:0)+titleFit.score+artistFit.score+albumScore,album:!!album,delta};
 }
 export async function rank(t,candidates,mode,source,convert,localized=new Map()){
@@ -353,7 +347,7 @@ export async function rank(t,candidates,mode,source,convert,localized=new Map())
  const ambiguousAlbum=first?.albumAlias&&results.some(x=>x!==first&&x.priority&&x.albumAlias&&norm(x.c.artist)!==norm(first.c.artist));
  const best=first?.priority&&!ambiguousAlbum?first:null;
  const check=best&&(best.priority<=1||tied);
- return {candidate:best?.c,albumAlias:!!best?.albumAlias,tied:!!tied,kind:check?'preselected':best?(best.exact?'exact':mode):'review',risk:first?(tied&&first.risk==='consistent'?'spelling':first.risk):'none',
+ return {candidate:best?.c,albumAlias:!!best?.albumAlias,dictionaryMatch:!!best?.dictionaryMatch,tied:!!tied,kind:check?'preselected':best?(best.exact?'exact':mode):'review',risk:first?(tied&&first.risk==='consistent'?'spelling':first.risk):'none',
   reason:ambiguousAlbum?'同名歌曲及相近专辑对应多个演唱者，请核对艺人':check?'已预选 · '+(tied?'多个候选证据相当，按搜索顺序选中首个发行版本。':'')+first.reason:first?.reason||'未找到歌曲',
   ordered:results.map(x=>({...x.c,matchReason:x.reason}))};
 }
@@ -373,8 +367,16 @@ export async function matchTrack(track,mode,convert,search,override,stopped=()=>
   const p=profile(track);
   const other=alternateTitle(track.name,p.credits);
   if(other)yield other;
-  const loanword=loanwordTitle(track.name);
-  if(loanword&&modes.includes('romaji'))yield loanword;
+  if(modes.includes('romaji')&&!p.version){
+   const names=dictionaryForms(track.name).slice(0,3);
+   const people=dictionaryForms(p.credits[0]?.person).slice(0,2);
+   if(names.length&&people.length)yield names[0]+' '+people[0];
+   for(const name of names){
+    if(p.credits[0]?.person)yield name+' '+p.credits[0].person;
+    yield name;
+   }
+   for(const person of people)yield track.name+' '+person;
+  }
   for(const person of spellings(p.credits[0]?.person||'')){
    if(person&&person!==p.credits[0]?.person)yield track.name+' '+person;
   }
@@ -397,7 +399,7 @@ export async function matchTrack(track,mode,convert,search,override,stopped=()=>
   const term=searchText(raw);
   if(!term||searched.has(term))continue;
   searched.add(term);
-  if(stopped()||decision?.candidate&&!decision.albumAlias)break;
+  if(stopped()||decision?.candidate&&!decision.albumAlias&&!decision.dictionaryMatch)break;
   try{
    for await(const page of search(term)){
     if(stopped())break;
@@ -414,7 +416,7 @@ export async function matchTrack(track,mode,convert,search,override,stopped=()=>
    }
   }catch(e){if(!pool.size)throw e;break}
  }
- if(!stopped()&&(!decision?.candidate||decision.albumAlias)&&lookupJapanese&&pool.size){
+ if(!stopped()&&(!decision?.candidate||decision.albumAlias||decision.dictionaryMatch)&&lookupJapanese&&pool.size){
   const ids=[...pool.keys()].filter(id=>/^\d+$/.test(id)).slice(0,80);
   try{
    const localized=new Map();

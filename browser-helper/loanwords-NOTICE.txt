@@ -1,0 +1,11 @@
+loanwords.tsv is adapted from JMdict, copyright the Electronic Dictionary
+Research and Development Group (EDRDG), under CC BY-SA 4.0.
+https://www.edrdg.org/wiki/index.php/JMdict-EDICT_Dictionary_Project
+https://www.edrdg.org/edrdg/licence.html
+https://creativecommons.org/licenses/by-sa/4.0/
+
+SongBridge extracted and sorted selected katakana spellings, English source
+words and single glosses from jmdict-simplified 3.6.2+20261109214828.
+The adapted table is distributed under the same CC BY-SA 4.0 license.
+https://github.com/scriptin/jmdict-simplified/releases/tag/3.6.2%2B20261109214828
+Rebuild with: python3 scripts/extract-loanwords.py <jmdict-eng JSON zip>
